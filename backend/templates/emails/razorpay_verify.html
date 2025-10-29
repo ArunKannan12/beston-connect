@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Razorpay Test</title>
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+</head>
+<body>
+  <button id="payBtn">Pay with Razorpay</button>
+
+  <script>
+    document.getElementById("payBtn").onclick = function (e) {
+      var options = {
+        key: "rzp_test_fR3w70EKj1IvMf", // Your test key
+        amount: 15992,                 // Amount in paise
+        currency: "INR",
+        name: "My Store",
+        description: "Test Transaction",
+        order_id: "order_QzzwoKn832pblB", // Order ID from backend
+
+        handler: function (response) {
+          // ✅ Send this to your backend /razorpay/verify endpoint
+          console.log("Payment successful!", response);
+
+          fetch("http://localhost:8000/api/orders/razorpay/verify/", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature
+            })
+          })
+          .then(res => res.json())
+          .then(data => console.log("Verification response:", data))
+          .catch(err => console.error("Verification error:", err));
+        },
+
+        prefill: {
+          name: "Test User",
+          email: "test@example.com"
+        },
+
+        theme: {
+          color: "#3399cc"
+        }
+      };
+
+      var rzp = new Razorpay(options);
+      rzp.open();
+      e.preventDefault();
+    }
+  </script>
+</body>
+</html>

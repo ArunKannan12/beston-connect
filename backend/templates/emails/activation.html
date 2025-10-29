@@ -1,0 +1,45 @@
+{% load i18n %}
+
+{% block subject %}
+{% blocktrans %}Activate Your Account{% endblocktrans %}
+{% endblock subject %}
+
+{% block html_body %}
+<table width="100%" cellpadding="0" cellspacing="0" border="0" style="font-family: Arial, sans-serif; background-color: #f8f9fa; padding: 20px;">
+  <tr>
+    <td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" border="0" style="background-color: #ffffff; border-radius: 6px; padding: 30px; text-align: left;">
+        <tr>
+          <td style="font-size: 18px; color: #212529; line-height: 1.5;">
+            <p style="margin-bottom: 20px;">
+              {% blocktrans %}Thank you for signing up. Please activate your account by clicking the link below:{% endblocktrans %}
+            </p>
+
+            <p style="margin-bottom: 30px;">
+              <a href="{{ activation_url }}" style="display: inline-block; background-color: #0d6efd; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 4px;">
+                {% blocktrans %}Activate Account{% endblocktrans %}
+              </a>
+            </p>
+            <p style="margin-bottom: 30px;">if the button is not working, click the below link
+              <a href="{{ activation_url }}" style="display: inline-block; background-color: #0d6efd; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 4px;">
+                {% blocktrans %}{{ activation_url }}{% endblocktrans %}
+              </a>
+            </p>
+            <p style="font-size: 14px; color: #6c757d;">
+              {% blocktrans %}If you didn’t request this, you can ignore this email.{% endblocktrans %}
+            </p>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+{% endblock html_body %}
+
+{% block text_body %}
+{% blocktrans %}Thank you for signing up. Please activate your account by visiting the link below:{% endblocktrans %}
+
+{{ activation_url }}
+
+{% blocktrans %}If you didn’t request this, you can ignore this email.{% endblocktrans %}
+{% endblock text_body %}
