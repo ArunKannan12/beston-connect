@@ -49,7 +49,6 @@ if __name__ == "__main__":
     # --- Step 1: Products migrations in order ---
     products_order = [
         "0001_initial",
-        "0002_category_image_alter_productimage_product",
         "0003_product_featured",
         "0004_productvariantimage",
         "0005_alter_productvariantimage_variant",
