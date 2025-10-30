@@ -346,10 +346,6 @@ if ENVIRONMENT == "production":
     EMAIL_BACKEND = "anymail.backends.brevo.EmailBackend"
     ANYMAIL = {
         "BREVO_API_KEY": os.getenv("BREVO_API_KEY"),
-        "SEND_DEFAULTS": {
-            "track_opens": True,
-            "track_clicks": True,
-        },
     }
     DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL")
 
