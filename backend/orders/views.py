@@ -27,7 +27,7 @@ from django.utils import timezone
 from cart.models import CartItem
 from rest_framework.views import APIView
 from rest_framework.exceptions import ValidationError
-from .models import Order,ShippingAddress,OrderStatus,OrderItemStatus
+from .models import Order,ShippingAddress,OrderStatus,OrderItemStatus,Refund
 from django.db import transaction
 import razorpay
 from django.conf import settings
@@ -164,6 +164,7 @@ class CancelOrderAPIView(APIView):
         item_ids = request.data.get("item_ids", None)
         cancel_reason = request.data.get("cancel_reason", "").strip() or "No reason provided"
 
+        cancellable_statuses = [OrderItemStatus.PENDING, OrderItemStatus.PROCESSING]
         # --- Fetch order safely ---
         try:
             order = (
@@ -177,11 +178,11 @@ class CancelOrderAPIView(APIView):
         # --- Validate item selection ---
         if item_ids:
             items_to_cancel = order.items.filter(
-                id__in=item_ids, status__in=["pending", "processing"]
+                id__in=item_ids, status__in=cancellable_statuses
             )
             if not items_to_cancel.exists():
                 valid_ids = list(
-                    order.items.filter(status__in=["pending", "processing"])
+                    order.items.filter(status__in=cancellable_statuses)
                     .values_list("id", flat=True)
                 )
                 return Response(
@@ -192,7 +193,7 @@ class CancelOrderAPIView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         else:
-            items_to_cancel = order.items.filter(status__in=["pending", "processing"])
+            items_to_cancel = order.items.filter(status__in=cancellable_statuses)
 
         if not items_to_cancel.exists():
             return Response(
@@ -201,39 +202,73 @@ class CancelOrderAPIView(APIView):
             )
 
         # --- Refund (if prepaid) ---
-        refund_id = None
+        refund_obj = None
         if order.is_paid:
             try:
-                # ✅ Full refund (includes delivery charge)
-                refund_id = process_refund(order)
+                refund_id = process_refund(order)  # external Razorpay refund
+                refund_obj = Refund.objects.create(
+                    order=order,
+                    refund_id=refund_id,
+                    amount=order.total,
+                    status="processed",
+                    processed_at=timezone.now(),
+                    notes=f"Auto refund triggered for cancelled order {order.order_number}"
+                )
+                order.has_refund = True
+                order.save(update_fields=["has_refund"])
             except Exception as e:
-                # Refund failed — log but continue cancellation
                 print("⚠️ Refund failed:", str(e))
-                refund_id = None
+                refund_obj = Refund.objects.create(
+                    order=order,
+                    amount=order.total,
+                    status="failed",
+                    notes=f"Refund error: {str(e)}"
+                )
 
-        # --- Restock items & update statuses ---
+        # --- Restock & Cancel items individually ---
+        cancelled_items_data = []
+        delhivery_cancellations = []
+
         for item in items_to_cancel:
             variant = item.product_variant
             variant.stock += item.quantity
             variant.save(update_fields=["stock"])
 
-            item.status = "cancelled"
+            item.status =  OrderItemStatus.CANCELLED
             item.cancel_reason = cancel_reason
             item.refund_amount = item.price * item.quantity if order.is_paid else 0
             item.save(update_fields=["status", "cancel_reason", "refund_amount"])
 
             create_warehouse_log(item, updated_by=user, comment="Order item cancelled")
 
-        # --- Update order status ---
-        active_items = order.items.filter(status__in=["pending", "processing"])
-        order.status = "partially_cancelled" if active_items.exists() else "cancelled"
+            # --- Cancel Delhivery shipment per item ---
+            delhivery_response = None
+            if item.waybill:
+                delhivery_response = cancel_delhivery_shipment(item.waybill)
+                delhivery_cancellations.append(
+                    {
+                        "item_id": item.id,
+                        "waybill": item.waybill,
+                        "response": delhivery_response,
+                    }
+                )
 
-        # --- Cancel Delhivery Shipment (if exists) ---
-        delhivery_response = None
-        if hasattr(order, "waybill") and order.waybill:
-            delhivery_response = cancel_delhivery_shipment(order.waybill)
+            cancelled_items_data.append(
+                {
+                    "id": item.id,
+                    "product_variant": str(item.product_variant),
+                    "quantity": item.quantity,
+                    "refund_amount": float(item.refund_amount),
+                }
+            )
 
-        # --- Finalize order record ---
+        # --- Update overall order status ---
+        active_items = order.items.filter(status__in=cancellable_statuses)
+        if active_items.exists():
+            order.status = "partially_cancelled"
+        else:
+            order.status = "cancelled"
+
         order.cancel_reason = cancel_reason
         order.cancelled_at = timezone.now()
         order.cancelled_by = user
@@ -255,23 +290,15 @@ class CancelOrderAPIView(APIView):
             {
                 "success": True,
                 "message": "Order cancellation processed successfully.",
-                "refund_id": refund_id,
+                "refund_id": refund_obj.refund_id if refund_obj else None,
                 "order": {
                     "order_number": order.order_number,
                     "status": order.status,
                     "cancel_reason": order.cancel_reason,
                     "cancelled_by": getattr(order.cancelled_by, "email", None),
                     "cancelled_by_role": order.cancelled_by_role,
-                    "delhivery_cancellation": delhivery_response,
-                    "cancelled_items": [
-                        {
-                            "id": item.id,
-                            "product_variant": str(item.product_variant),
-                            "quantity": item.quantity,
-                            "refund_amount": float(item.refund_amount),
-                        }
-                        for item in items_to_cancel
-                    ],
+                    "delhivery_cancellations": delhivery_cancellations,
+                    "cancelled_items": cancelled_items_data,
                 },
             },
             status=status.HTTP_200_OK,
@@ -477,8 +504,8 @@ class OrderTrackingAPIView(APIView):
 
     def get(self, request, order_number):
         """
-        Fetch tracking info for an order from Delhivery API.
-        Supports both waybill-based and ref_id-based tracking.
+        Fetch tracking info for all items in an order from Delhivery API.
+        Each OrderItem may have its own waybill and tracking URL.
         """
         # 1️⃣ Validate order existence
         try:
@@ -496,59 +523,77 @@ class OrderTrackingAPIView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # 3️⃣ Fetch tracking info (via helper)
-        waybill = order.waybill
-        ref_id = order.order_number
+        # 3️⃣ Prepare tracking details for each order item
+        tracking_results = []
+        order_items = order.items.all()
 
-        tracking_info = track_delhivery_shipment(waybill=waybill, ref_id=ref_id)
-
-        # 4️⃣ Handle API response
-        if tracking_info.get("success"):
-            summary = tracking_info.get("summary")
-
-            # Normalize for serializer — Delhivery sometimes returns list or dict
-            if isinstance(summary, list):
-                serializer = ShipmentTrackingSerializer(summary, many=True)
-                data = serializer.data
-            else:
-                serializer = ShipmentTrackingSerializer(summary)
-                data = serializer.data
-
+        if not order_items.exists():
             return Response(
-                {
-                    "success": True,
-                    "message": "Tracking fetched successfully",
-                    "tracking": data,
-                    "tracking_url": order.tracking_url,
-                },
-                status=status.HTTP_200_OK,
+                {"success": False, "message": "No items found in this order"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # 5️⃣ Handle failure
+        for item in order_items:
+            waybill = item.waybill
+            ref_id = f"ITEM-{item.id}"
+
+            if not waybill:
+                tracking_results.append({
+                    "item_id": item.id,
+                    "product": str(item.product_variant),
+                    "waybill": None,
+                    "tracking_url": None,
+                    "tracking": None,
+                    "message": "Waybill not yet generated."
+                })
+                continue
+
+            tracking_info = track_delhivery_shipment(waybill=waybill, ref_id=ref_id)
+
+            if tracking_info.get("success"):
+                summary = tracking_info.get("summary")
+                serializer = ShipmentTrackingSerializer(
+                    summary, many=isinstance(summary, list)
+                )
+                tracking_data = serializer.data
+                message = "Tracking fetched successfully"
+            else:
+                tracking_data = None
+                message = tracking_info.get("message", "Tracking unavailable")
+
+            tracking_results.append({
+                "item_id": item.id,
+                "product": str(item.product_variant),
+                "waybill": waybill,
+                "tracking_url": item.tracking_url,
+                "tracking": tracking_data,
+                "message": message,
+            })
+
+        # 4️⃣ Return combined response
         return Response(
             {
-                "success": False,
-                "message": tracking_info.get("message", "Tracking unavailable"),
-                "details": tracking_info.get("details"),
+                "success": True,
+                "order_number": order.order_number,
+                "tracking_items": tracking_results,
             },
-            status=status.HTTP_400_BAD_REQUEST,
+            status=status.HTTP_200_OK,
         )
-
 
 class GenerateDelhiveryLabelAPIView(APIView):
     permission_classes = [IsAdmin]
 
     def get(self, request, order_number):
         """
-        Generate Delhivery packing slip (PDF S3 link).
+        Generate Delhivery packing slip (PDF label) and return temporary S3 link.
         """
         try:
             order = Order.objects.get(order_number=order_number)
         except Order.DoesNotExist:
-            return Response({"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"success": False, "message": "Order not found"}, status=404)
 
         if not order.waybill:
-            return Response({"error": "Waybill not found for this order"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"success": False, "message": "Waybill not found for this order"}, status=400)
 
         url = "https://track.delhivery.com/api/p/packing_slip"
         headers = {
@@ -556,39 +601,41 @@ class GenerateDelhiveryLabelAPIView(APIView):
             "Accept": "application/json",
         }
         params = {
-            "wbns": order.waybill,  # ✅ correct param name
-            "pdf": "true",          # ✅ true = generate S3 link
-            "pdf_size": "A4",       # or "4R"
+            "wbns": order.waybill,
+            "pdf": "true",
+            "pdf_size": "A4",
         }
 
         try:
             response = requests.get(url, headers=headers, params=params, timeout=15)
+            response.raise_for_status()
             data = response.json()
+        except requests.Timeout:
+            return Response({"success": False, "message": "Delhivery API timeout"}, status=504)
+        except requests.RequestException as e:
+            return Response({"success": False, "message": f"Delhivery request failed: {str(e)}"}, status=502)
 
-            if response.status_code != 200:
-                return Response(
-                    {"error": "Failed to generate label", "details": data},
-                    status=response.status_code,
-                )
+        packages = data.get("packages", [])
+        if not packages:
+            return Response({"success": False, "message": "No packages found in response"}, status=400)
 
-            packages = data.get("packages", [])
-            if not packages:
-                return Response({"error": "No packages found in response"}, status=400)
+        pdf_link = packages[0].get("pdf_download_link")
+        if not pdf_link:
+            return Response({"success": False, "message": "PDF link not found in response"}, status=400)
 
-            pdf_link = packages[0].get("pdf_download_link")
-            if not pdf_link:
-                return Response({"error": "PDF link not found in response"}, status=400)
+        # ✅ Save label URL and timestamp
+        order.label_url = pdf_link
+        order.label_generated_at = timezone.now()
+        order.save(update_fields=["label_url", "label_generated_at"])
 
-            # Optionally store label URL (temporary 24h link)
-            order.label_url = pdf_link
-            order.save(update_fields=["label_url"])
+        # ✅ Create warehouse log
+        create_warehouse_log(order, updated_by=request.user, comment="Delhivery label generated")
 
-            return Response({
-                "success": True,
-                "order_number": order.order_number,
-                "waybill": order.waybill,
-                "label_url": pdf_link,
-            })
+        return Response({
+            "success": True,
+            "message": "Delhivery label generated successfully.",
+            "order_number": order.order_number,
+            "waybill": order.waybill,
+            "label_url": pdf_link,
+        })
 
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

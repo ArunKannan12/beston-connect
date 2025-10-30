@@ -169,6 +169,12 @@ def verify_razorpay_payment(order, razorpay_order_id, razorpay_payment_id, razor
 
     # --- Clear user cart ---
     CartItem.objects.filter(cart__user=user).delete()
+    tracking_url = None
+    if shipment.get("success") and order.waybill:
+        tracking_url = f"https://www.delhivery.com/track/package/{order.waybill}/"
+    elif order.waybill:
+        tracking_url = f"https://www.delhivery.com/track/package/{order.waybill}/"
+   
 
     # --- Send confirmation (no tracking yet) ---
     send_multichannel_notification(
@@ -179,6 +185,7 @@ def verify_razorpay_payment(order, razorpay_order_id, razorpay_payment_id, razor
         channels=["email"],
         payload={
             "shipment_created": shipment.get("success"),
+            "tracking_url": tracking_url,
         },
     )
 

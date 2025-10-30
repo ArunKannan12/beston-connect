@@ -32,6 +32,9 @@ from orders.models import Order,ReturnRequest,ReplacementRequest
 from .helpers import str_to_bool
 from .pagination import FlexiblePageSizePagination
 from .models import AdminLog
+import hmac
+import hashlib
+from django.conf import settings
 User=get_user_model()
 
 class AdminDashboardStatsAPIView(APIView):
@@ -837,66 +840,160 @@ class BannerUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [IsAdmin]
     parser_classes = (MultiPartParser, FormParser)
 
+
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from django.utils import timezone
+from orders.models import Order
 from orders.signals import send_multichannel_notification
-class AdminMarkAsShippedAPIView(APIView):
-    permission_classes = [IsAdmin]
 
-    def post(self, request, order_number):
-        """
-        Admin marks an order as shipped.
-        Sends tracking email if waybill exists.
-        """
+class DelhiveryWebhookAPIView(APIView):
+    """
+    Receives real-time shipment status updates from Delhivery.
+    Handles both single and multiple shipment payloads.
+    """
+
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request):
+        data = request.data
+
         try:
-            order = Order.objects.get(order_number=order_number)
-        except Order.DoesNotExist:
-            return Response(
-                {"success": False, "message": "Order not found"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+            # Delhivery sometimes sends 'Shipments' (list) or single 'Shipment'
+            shipments = data.get("Shipments") or [data.get("Shipment", {})]
 
-        # Validate status
-        if order.status == "shipped":
-            return Response(
-                {"success": False, "message": "Order is already marked as shipped."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            processed = []
 
-        # Ensure shipment exists (waybill available)
-        if not order.waybill:
-            return Response(
-                {
-                    "success": False,
-                    "message": "Cannot mark as shipped — no shipment created yet.",
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            for shipment in shipments:
+                waybill = shipment.get("AWB")
+                status_text = (shipment.get("Status") or "").strip().lower()
+                updated_at = shipment.get("StatusDateTime")
 
-        # --- Update order ---
-        order.status = "shipped"
-        order.shipped_at = timezone.now()
-        order.save(update_fields=["status", "shipped_at"])
+                if not waybill:
+                    continue  # skip invalid entries
 
-        # --- Send tracking email ---
-        tracking_url = f"https://www.delhivery.com/track/package/{order.waybill}/"
+                # Map Delhivery status → internal order status
+                status_map = {
+                    "manifested": "processing",
+                    "in transit": "in_transit",
+                    "out for delivery": "out_for_delivery",
+                    "delivered": "delivered",
+                    "rto": "returned",
+                    "cancelled": "cancelled",
+                    "undelivered": "undelivered",
+                }
 
-        send_multichannel_notification(
-            user=order.user,
-            order=order,
-            event="order_shipped",
-            message=f"🚚 Your order {order.order_number} has been shipped via Delhivery!",
-            channels=["email"],
-            payload={
-                "tracking_url": tracking_url,
-                "courier": "Delhivery",
-                "waybill": order.waybill,
-            },
-        )
+                order_status = status_map.get(status_text)
+                if not order_status:
+                    continue  # ignore unknown statuses
 
-        return Response(
-            {
-                "success": True,
-                "message": f"Order {order.order_number} marked as shipped and tracking sent.",
-                "tracking_url": tracking_url,
-            },
-            status=status.HTTP_200_OK,
-        )
+                try:
+                    order = Order.objects.get(waybill=waybill)
+                except Order.DoesNotExist:
+                    continue  # no matching order, skip silently
+
+                # Update order status
+                order.status = order_status
+                if order_status == "delivered":
+                    order.delivered_at = timezone.now()
+                order.save(update_fields=["status", "delivered_at"])
+
+                # Notify user automatically
+                send_multichannel_notification(
+                    user=order.user,
+                    order=order,
+                    event=f"order_{order_status}",
+                    message=f"Your order {order.order_number} is now {order_status.replace('_', ' ')}!",
+                    channels=["email"],
+                    payload={
+                        "waybill": waybill,
+                        "courier": "Delhivery",
+                        "status_updated_at": updated_at,
+                    },
+                )
+
+                processed.append({
+                    "order_number": order.order_number,
+                    "status": order_status,
+                    "waybill": waybill,
+                })
+
+            return Response({"success": True, "processed": processed}, status=200)
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+
+# class RazorpayWebhookAPIView(APIView):
+#     authentication_classes = []
+#     permission_classes = []
+
+#     def post(self, request):
+#         try:
+#             # --- Step 1: Verify Razorpay signature ---
+#             webhook_secret = settings.RAZORPAY_WEBHOOK_SECRET
+#             received_signature = request.headers.get("X-Razorpay-Signature")
+#             body = request.body.decode("utf-8")
+
+#             if not webhook_secret:
+#                 return Response(
+#                     {"error": "Webhook secret not configured"},
+#                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#                 )
+
+#             generated_signature = hmac.new(
+#                 webhook_secret.encode(), body.encode(), hashlib.sha256
+#             ).hexdigest()
+
+#             if not hmac.compare_digest(received_signature, generated_signature):
+#                 return Response({"error": "Invalid signature"}, status=status.HTTP_400_BAD_REQUEST)
+
+#             # --- Step 2: Extract Razorpay event info ---
+#             event = request.data.get("event")
+#             payload = request.data.get("payload", {})
+#             print(f"✅ Razorpay webhook received: {event}")
+
+#             if event == "payment.captured":
+#                 payment_entity = payload.get("payment", {}).get("entity", {})
+#                 razorpay_order_id = payment_entity.get("order_id")
+#                 razorpay_payment_id = payment_entity.get("id")
+
+#                 # --- Step 3: Update your order ---
+#                 try:
+#                     order = Order.objects.get(razorpay_order_id=razorpay_order_id)
+#                     order.payment_id = razorpay_payment_id
+#                     order.status = "paid"
+#                     order.save(update_fields=["payment_id", "status"])
+#                     print(f"✅ Order {order.order_number} marked as paid.")
+
+#                     # (Optional) Send confirmation email / trigger promoter commission
+#                     from orders.signals import send_multichannel_notification
+#                     send_multichannel_notification(
+#                         user=order.user,
+#                         order=order,
+#                         event="order_paid",
+#                         message=f"🎉 Payment received for your order {order.order_number}.",
+#                         channels=["email"],
+#                     )
+
+#                 except Order.DoesNotExist:
+#                     print(f"⚠️ No matching order found for Razorpay order ID: {razorpay_order_id}")
+
+#             elif event == "payment.failed":
+#                 payment_entity = payload.get("payment", {}).get("entity", {})
+#                 razorpay_order_id = payment_entity.get("order_id")
+
+#                 Order.objects.filter(razorpay_order_id=razorpay_order_id).update(status="failed")
+#                 print(f"❌ Payment failed for order: {razorpay_order_id}")
+
+#             # You can also listen to:
+#             # - refund.processed
+#             # - payout.processed (later if you add promoter/investor payouts)
+
+#             return Response({"success": True})
+
+#         except Exception as e:
+#             print("⚠️ Razorpay Webhook Error:", e)
+#             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

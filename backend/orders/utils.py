@@ -7,7 +7,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework.exceptions import ValidationError
 import razorpay
 from django.conf import settings
-from .models import Order, OrderItem, ShippingAddress
+from .models import Order, OrderItem, ShippingAddress,Refund
 from products.models import ProductVariant
 from promoter.models import Promoter
 from cart.models import CartItem
@@ -15,6 +15,7 @@ import razorpay
 from admin_dashboard.models import AdminLog
 from razorpay.errors import ServerError, BadRequestError, GatewayError, SignatureVerificationError
 from django.conf import settings
+from decimal import Decimal
 
 from .serializers import OrderSerializer
 
@@ -258,11 +259,14 @@ def calculate_order_totals(items, shipping_address=None):
         "subtotal": subtotal,
         "total": subtotal,
     }
-
 import razorpay
+from decimal import Decimal
 from django.conf import settings
+from django.db import models, transaction
 from django.utils import timezone
 from django.core.exceptions import ValidationError
+
+
 def process_refund(order, items=None, amount=None):
     """
     Handles full or partial refund for an Order.
@@ -284,102 +288,195 @@ def process_refund(order, items=None, amount=None):
     # --- Determine refund amount ---
     if amount is None:
         if items:
-            # Partial refund for specific items
-            amount = sum(item.price * item.quantity for item in items)
+            # Partial refund (for specific items)
+            amount = sum(Decimal(item.price) * item.quantity for item in items)
         else:
-            # Full refund (includes delivery charge since customer paid it)
-            amount = order.total
+            # Full refund (includes delivery charge)
+            amount = Decimal(order.total)
+
+    amount = Decimal(amount).quantize(Decimal("0.01"))
+    if amount <= 0:
+        raise ValidationError("Refund amount must be greater than zero.")
 
     # --- Initialize Razorpay client ---
     client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
 
     try:
-        refund = client.payment.refund(order.razorpay_payment_id, {"amount": int(amount * 100)})
-
-        # --- Update refund info on Order ---
-        refund_status = refund.get("status", "pending")
-        order.refund_id = refund.get("id")
-        order.refund_status = refund_status
-        order.refunded_at = timezone.now()
-        order.is_refunded = refund_status == "processed"  # ✅ True if refund processed
-        order.save(update_fields=["refund_status", "refund_id", "refunded_at", "is_refunded"])
-
-        # --- Mark refunded items ---
-        if items:
-            for item in items:
-                item.status = "cancelled"  # or "refunded" if added to status choices
-                item.refund_amount = item.price * item.quantity
-                item.save(update_fields=["status", "refund_amount"])
-        else:
-            # Full refund → mark all items refunded
-            order.items.update(
-                status="cancelled",
-                refund_amount=models.F("price") * models.F("quantity")
+        with transaction.atomic():
+            refund_response = client.payment.refund(
+                order.razorpay_payment_id,
+                {"amount": int(amount * 100)}  # Razorpay expects amount in paise
             )
 
-        return order.refund_id
+            refund_id = refund_response.get("id")
+            refund_status = refund_response.get("status", "pending")
+
+            # --- Update refund info on Order ---
+            refund = Refund.objects.create(
+                order=order,
+                refund_id=refund_id,
+                amount=amount,
+                status=refund_status,
+                processed_at=timezone.now() if refund_status == "processed" else None,
+                notes=f"Refund initiated via Razorpay for ₹{amount}"
+            )
+            # --- Mark refunded items ---
+            if items:
+                # Partial refund
+                for item in items:
+                    item.status = "cancelled"  # You can change to "refunded" if you add that choice
+                    item.refund_amount = Decimal(item.price) * item.quantity
+                    item.save(update_fields=["status", "refund_amount"])
+            else:
+                # Full refund → mark all items refunded
+                order.items.update(
+                    status="cancelled",
+                    refund_amount=models.F("price") * models.F("quantity")
+                )
+
+            return refund_id
 
     except Exception as e:
-        order.refund_status = "failed"
-        order.is_refunded = False
-        order.save(update_fields=["refund_status", "is_refunded"])
+        Refund.objects.create(
+            order=order,
+            amount=amount,
+            status="failed",
+            notes=str(e)
+        )
         raise ValidationError(f"Refund failed: {str(e)}")
 
-    
-def check_refund_status(order_number):
+from decimal import Decimal
+import razorpay
+from django.conf import settings
+from django.utils import timezone
+from orders.models import Order
+
+def process_refund(order, items=None, amount=None):
+    """
+    Handles full or partial refund for an Order.
+    - If `items` provided → partial refund for those OrderItems.
+    - Defaults to full refund (including delivery charge).
+    - Creates a Refund record and updates item statuses.
+    """
+
+    if not order.is_paid:
+        raise ValidationError("Cannot refund an unpaid order.")
+
+    if order.payment_method.lower() != "razorpay":
+        raise ValidationError("Only Razorpay refunds are supported.")
+
+    if not order.razorpay_payment_id:
+        raise ValidationError("No Razorpay payment ID available for refund.")
+
+    # --- Determine refund amount ---
+    if amount is None:
+        if items:
+            amount = sum(Decimal(item.price) * item.quantity for item in items)
+        else:
+            amount = Decimal(order.total)
+
+    amount = Decimal(amount).quantize(Decimal("0.01"))
+    if amount <= 0:
+        raise ValidationError("Refund amount must be greater than zero.")
+
+    client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
+
     try:
-        order = Order.objects.get(order_number=order_number)
-
-        if not order.refund_id:
-            return {"success": False, "message": "No refund initiated for this order."}
-
-        client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
-        try:
-            refund = client.refund.fetch(order.refund_id)
-            status = refund.get("status", "unknown")
-
-            order.refund_status = status
-
-            if status == "processed":
-                order.is_refunded = True
-                order.refunded_at = timezone.now()
-            elif status == "failed":
-                order.is_refunded = False
-
-            order.save(update_fields=["refund_status", "is_refunded", "refunded_at"])
-
-            message = (
-                "Refund Processed – may take 5–7 days to reflect in your account."
-                if status == "processed"
-                else "Refund is in progress. Please check back later."
+        with transaction.atomic():
+            # Create refund via Razorpay API
+            refund_response = client.payment.refund(
+                order.razorpay_payment_id,
+                {"amount": int(amount * 100)}  # Razorpay expects paise
             )
 
-            return {
-                "success": True,
-                "order_number": order.order_number,
-                "refund_id": refund.get("id", order.refund_id),
-                "refund_status": status,
-                "amount": refund.get("amount", Decimal(order.total) * 100) / 100,
-                "refund_method": "Razorpay",
-                "payment_id": refund.get("payment_id"),
-                "is_refunded": order.is_refunded,
-                "refunded_at": order.refunded_at,
-                "message": message,
-            }
+            refund_id = refund_response.get("id")
+            refund_status = refund_response.get("status", "pending")
 
-        except razorpay.errors.ServerError:
-            return {"success": False, "message": "Razorpay server error. Please try again later."}
-        except razorpay.errors.BadRequestError as e:
-            return {"success": False, "message": f"Invalid refund ID: {str(e)}"}
-        except razorpay.errors.GatewayError as e:
-            return {"success": False, "message": f"Payment gateway error: {str(e)}"}
-        except Exception as e:
-            return {"success": False, "message": str(e) or "Unknown Razorpay error."}
+            # Create Refund record in DB
+            refund = Refund.objects.create(
+                order=order,
+                refund_id=refund_id,
+                amount=amount,
+                status=refund_status,
+                processed_at=timezone.now() if refund_status == "processed" else None,
+                notes=f"Refund initiated via Razorpay for ₹{amount}"
+            )
 
+            # Mark refunded items
+            if items:
+                for item in items:
+                    item.status = "cancelled"
+                    item.refund_amount = Decimal(item.price) * item.quantity
+                    item.save(update_fields=["status", "refund_amount"])
+            else:
+                order.items.update(
+                    status="cancelled",
+                    refund_amount=models.F("price") * models.F("quantity")
+                )
+
+            return refund.refund_id
+
+    except Exception as e:
+        Refund.objects.create(
+            order=order,
+            amount=amount,
+            status="failed",
+            notes=str(e)
+        )
+        raise ValidationError(f"Refund failed: {str(e)}")
+
+
+def check_refund_status(order_number):
+    """
+    Checks and updates the latest refund status for an order.
+    Syncs each Refund entry with Razorpay.
+    """
+    try:
+        order = Order.objects.get(order_number=order_number)
     except Order.DoesNotExist:
         return {"success": False, "message": "Order not found."}
+
+    latest_refund = order.refunds.order_by("-created_at").first()
+    if not latest_refund or not latest_refund.refund_id:
+        return {"success": False, "message": "No refund initiated for this order."}
+
+    client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
+
+    try:
+        refund_data = client.refund.fetch(latest_refund.refund_id)
+        status = refund_data.get("status", "unknown")
+        refund_amount = Decimal(refund_data.get("amount", 0)) / Decimal(100)
+
+        # Update Refund model
+        if latest_refund.status != status:
+            latest_refund.status = status
+            if status == "processed":
+                latest_refund.processed_at = timezone.now()
+            latest_refund.save(update_fields=["status", "processed_at"])
+
+        # Response summary
+        if status == "processed":
+            message = "✅ Refund processed successfully. Amount will reflect soon."
+        elif status in ("pending", "queued"):
+            message = "⏳ Refund is in progress. Please check back later."
+        elif status == "failed":
+            message = "❌ Refund failed. Please contact support."
+        else:
+            message = f"Refund status: {status}"
+
+        return {
+            "success": True,
+            "order_number": order.order_number,
+            "refund_id": latest_refund.refund_id,
+            "refund_status": status,
+            "amount": float(refund_amount),
+            "refund_method": "Razorpay",
+            "processed_at": latest_refund.processed_at,
+            "message": message,
+        }
+
     except Exception as e:
-        return {"success": False, "message": str(e) or "Unknown error."}
+        return {"success": False, "message": str(e) or "Unknown Razorpay error."}
 
 import requests
 from django.conf import settings
@@ -438,30 +535,34 @@ def get_delivery_charge(o_pin, d_pin, weight_grams=1, payment_type="Pre-paid"):
 
 def create_delhivery_shipment(order):
     """
-    Creates a shipment on Delhivery for the given order and returns
-    tracking info. Handles both prepaid and COD orders.
+    Creates a shipment on Delhivery for the given order and returns tracking info.
+    Handles both prepaid and COD orders.
     """
-    import requests
-    import json
+    import json, requests, logging
     from django.conf import settings
 
+    logger = logging.getLogger(__name__)
     url = "https://track.delhivery.com/api/cmu/create.json"
+
     headers = {
         "Authorization": f"Token {settings.DELHIVERY_API_TOKEN}",
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
 
-    pickup = settings.DELHIVERY_PICKUP  # preconfigured pickup dict
+    pickup = getattr(settings, "DELHIVERY_PICKUP", None)
+    if not pickup:
+        return {"success": False, "error": "Pickup configuration missing in settings"}
 
-    # --- Calculate total weight ---
-    total_weight_grams = sum(
-        (item.product_variant.weight or 0) * item.quantity
-        for item in order.items.all()
-    )
-    total_weight_kg = max(total_weight_grams / 1000.0, 0.1)  # minimum 0.1kg required
+    try:
+        total_weight_grams = sum(
+            (item.product_variant.weight or 0) * item.quantity for item in order.items.all()
+        )
+        total_weight_kg = max(total_weight_grams / 1000.0, 0.1)
+    except Exception as e:
+        logger.exception("Error calculating shipment weight")
+        total_weight_kg = 0.1
 
-    # --- Build shipment data as per Delhivery specs ---
     shipment = {
         "name": order.shipping_address.full_name,
         "add": order.shipping_address.address,
@@ -475,7 +576,7 @@ def create_delhivery_shipment(order):
         "quantity": str(sum(item.quantity for item in order.items.all())),
         "products_desc": ", ".join(
             [item.product_variant.product.name for item in order.items.all()]
-        )[:250],  # avoid exceeding max length
+        )[:250],
         "total_amount": str(order.total),
         "cod_amount": "0" if order.is_paid else str(order.total),
         "weight": str(round(total_weight_kg, 2)),
@@ -492,61 +593,51 @@ def create_delhivery_shipment(order):
         "seller_inv": f"INV-{order.order_number}",
         "shipping_mode": "Surface",
         "address_type": "home",
-        "order_date": None,
     }
 
     payload = {
         "format": "json",
         "data": json.dumps({
             "shipments": [shipment],
-            "pickup_location": {
-                # Must match pickup name in Delhivery dashboard
-                "name": pickup["name"]
-            }
+            "pickup_location": {"name": pickup["name"]},
         }),
     }
 
-    # --- Call Delhivery API ---
     try:
         res = requests.post(url, headers=headers, data=payload, timeout=20)
-        data = res.json()
-    except Exception as e:
-        return {"success": False, "error": f"Request failed: {str(e)}"}
+        try:
+            data = res.json()
+        except ValueError:
+            logger.warning(f"Invalid JSON response from Delhivery: {res.text}")
+            return {"success": False, "error": "Invalid JSON response", "response_text": res.text}
+    except requests.RequestException as e:
+        logger.exception("Delhivery shipment request failed")
+        return {"success": False, "error": str(e)}
 
-    # --- Success case ---
     if res.status_code == 200 and data.get("packages"):
         pkg = data["packages"][0]
         waybill = pkg.get("waybill")
-
         if not waybill:
             return {"success": False, "error": "Waybill missing in response", "response": data}
 
-        # ✅ Save shipment info
-        public_tracking_url = f"https://www.delhivery.com/track/package/{waybill}/"
-        internal_tracking_url = f"https://track.delhivery.com/p/{waybill}"
-
         order.waybill = waybill
         order.courier = "Delhivery"
-        order.tracking_url = public_tracking_url  # Customer-facing link
-        order.save(update_fields=["waybill", "courier", "tracking_url", "status"])
+        order.tracking_url = f"https://www.delhivery.com/track/package/{waybill}/"
+        order.save(update_fields=["waybill", "courier", "tracking_url"])
+
+        logger.info(f"✅ Shipment created on Delhivery: {order.order_number} ({waybill})")
 
         return {
             "success": True,
             "waybill": waybill,
             "ref_id": order.order_number,
-            "tracking_url": public_tracking_url,
-            "internal_tracking_url": internal_tracking_url,
+            "tracking_url": order.tracking_url,
+            "internal_tracking_url": f"https://track.delhivery.com/p/{waybill}",
             "response": data,
         }
 
-    # --- Failure case ---
-    return {
-        "success": False,
-        "status_code": res.status_code,
-        "error": data or {"message": "No valid response"},
-    }
-
-
+    logger.warning(f"⚠️ Delhivery shipment creation failed ({res.status_code}): {data}")
+    return {"success": False, "status_code": res.status_code, "error": data}
 
 def cancel_delhivery_shipment(waybill):
     """
@@ -593,21 +684,29 @@ import logging
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
-
 def track_delhivery_shipment(waybill=None, ref_id=None):
     """
-    Tracks a Delhivery shipment using waybill or ref_id.
+    Tracks one or multiple Delhivery shipments using waybill(s) or ref_id(s).
+    Automatically detects list vs string input.
     Works for both staging and live environments.
     """
     if not waybill and not ref_id:
         return {"success": False, "message": "waybill or ref_id is required"}
 
     base_url = "https://track.delhivery.com/api/v1/packages/json/"
+
+    # 🧠 Handle both single and list input
     params = {}
     if waybill:
-        params["waybill"] = waybill
+        if isinstance(waybill, (list, tuple)):
+            params["waybill"] = ",".join(map(str, waybill))
+        else:
+            params["waybill"] = str(waybill)
     if ref_id:
-        params["ref_ids"] = ref_id
+        if isinstance(ref_id, (list, tuple)):
+            params["ref_ids"] = ",".join(map(str, ref_id))
+        else:
+            params["ref_ids"] = str(ref_id)
 
     headers = {
         "Authorization": f"Token {settings.DELHIVERY_API_TOKEN}",
@@ -634,44 +733,50 @@ def track_delhivery_shipment(waybill=None, ref_id=None):
                 "details": data,
             }
 
-        shipment = shipment_data[0].get("Shipment", {})
-        status_info = shipment.get("Status", {})
-        scans = shipment.get("Scans", [])
+        # 🧩 Build summaries for each shipment
+        results = []
+        for shipment_entry in shipment_data:
+            shipment = shipment_entry.get("Shipment", {})
+            status_info = shipment.get("Status", {})
+            scans = shipment.get("Scans", [])
 
-        # Normalize inconsistent field names between staging and production
-        summary = {
-            "waybill": shipment.get("AWB") or shipment.get("Waybill"),
-            "ref_id": shipment.get("ReferenceNo") or shipment.get("OrderNo"),
-            "status": status_info.get("Status"),
-            "status_type": status_info.get("StatusType"),
-            "remarks": status_info.get("Instructions"),
-            "scanned_on": status_info.get("StatusDateTime"),
-            "origin": shipment.get("Origin"),
-            "destination": shipment.get("Destination"),
-            "pickup_date": shipment.get("PickUpDate") or shipment.get("PickedupDate"),
-            "delivered_date": shipment.get("DeliveryDate") or shipment.get("DeliveredDate"),
-        }
+            summary = {
+                "waybill": shipment.get("AWB") or shipment.get("Waybill"),
+                "ref_id": shipment.get("ReferenceNo") or shipment.get("OrderNo"),
+                "status": status_info.get("Status"),
+                "status_type": status_info.get("StatusType"),
+                "remarks": status_info.get("Instructions"),
+                "scanned_on": status_info.get("StatusDateTime"),
+                "origin": shipment.get("Origin"),
+                "destination": shipment.get("Destination"),
+                "pickup_date": shipment.get("PickUpDate") or shipment.get("PickedupDate"),
+                "delivered_date": shipment.get("DeliveryDate") or shipment.get("DeliveredDate"),
+            }
 
-        # Flatten scan events
-        scan_events = []
-        for s in scans:
-            detail = s.get("ScanDetail", {})
-            scan_events.append({
-                "datetime": detail.get("ScanDateTime"),
-                "status": detail.get("Scan"),
-                "type": detail.get("ScanType"),
-                "location": detail.get("ScannedLocation"),
-                "remarks": detail.get("Instructions"),
-                "code": detail.get("StatusCode"),
+            scan_events = []
+            for s in scans:
+                detail = s.get("ScanDetail", {})
+                scan_events.append({
+                    "datetime": detail.get("ScanDateTime"),
+                    "status": detail.get("Scan"),
+                    "type": detail.get("ScanType"),
+                    "location": detail.get("ScannedLocation"),
+                    "remarks": detail.get("Instructions"),
+                    "code": detail.get("StatusCode"),
+                })
+
+            results.append({
+                "summary": summary,
+                "scans": scan_events,
             })
 
-        logger.info(f"📦 Tracked Delhivery shipment: {summary}")
+        logger.info(f"📦 Tracked {len(results)} Delhivery shipment(s).")
 
+        # ✅ Return uniform structure
         return {
             "success": True,
-            "message": "Shipment tracking fetched successfully.",
-            "summary": summary,
-            "scans": scan_events,
+            "message": f"Fetched {len(results)} shipment(s) successfully.",
+            "results": results,
             "raw_data": data,
         }
 
@@ -682,4 +787,3 @@ def track_delhivery_shipment(waybill=None, ref_id=None):
             "message": "Error contacting Delhivery",
             "error": str(e),
         }
-

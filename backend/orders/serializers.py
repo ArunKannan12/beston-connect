@@ -1,4 +1,4 @@
-from .models import Order, OrderItem, ShippingAddress
+from .models import Order, OrderItem, ShippingAddress,Refund
 from rest_framework import serializers
 from products.serializers import ProductVariantSerializer
 from products.models import ProductVariant
@@ -7,6 +7,10 @@ from rest_framework.validators import UniqueTogetherValidator
 from promoter.models import Promoter
 from django.utils import timezone
 from datetime import timedelta
+class RefundSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Refund
+        fields = ['refund_id', 'amount', 'status', 'created_at', 'processed_at', 'notes']
 
 class ShippingAddressSerializer(serializers.ModelSerializer):
     class Meta:
@@ -31,20 +35,29 @@ class ShippingAddressSerializer(serializers.ModelSerializer):
 
 class OrderItemSerializer(serializers.ModelSerializer):
     product_variant = ProductVariantSerializer(read_only=True)
-    product_variant_id = serializers.PrimaryKeyRelatedField(queryset=ProductVariant.objects.all(), write_only=True)
+    product_variant_id = serializers.PrimaryKeyRelatedField(
+        queryset=ProductVariant.objects.all(), write_only=True
+    )
 
     class Meta:
         model = OrderItem
         fields = [
-            'id','product_variant', 'product_variant_id',
-            'quantity', 'price',
+            'id',
+            'product_variant', 'product_variant_id',
+            'quantity', 'price', 'status',
+            'courier', 'waybill', 'tracking_url',
+            'handoff_timestamp', 'shipped_at',
         ]
+        read_only_fields = ['status', 'tracking_url', 'handoff_timestamp', 'shipped_at']
+
     def create(self, validated_data):
+        product_variant = validated_data['product_variant_id']
         return OrderItem.objects.create(
-            product_variant=validated_data['product_variant_id'],
+            product_variant=product_variant,
             quantity=validated_data['quantity'],
-            price=validated_data['product_variant_id'].final_price
+            price=product_variant.final_price
         )
+
 
 class OrderSerializer(serializers.ModelSerializer):
     shipping_address = ShippingAddressSerializer(required=False)
@@ -57,6 +70,7 @@ class OrderSerializer(serializers.ModelSerializer):
     cancelled_by = serializers.StringRelatedField(read_only=True)
     order_number = serializers.CharField(read_only=True)
     cancelable = serializers.SerializerMethodField()
+    refunds = RefundSerializer(many=True, read_only=True)
 
     class Meta:
         model = Order
@@ -66,27 +80,17 @@ class OrderSerializer(serializers.ModelSerializer):
             'payment_method', 'is_paid', 'paid_at',
             'razorpay_order_id', 'razorpay_payment_id',
             'promoter', 'cancel_reason', 'cancelled_at', 'cancelled_by',
-            'is_restocked', 'cancelable', 'items',
-
-            # Courier / tracking info
-            'courier', 'waybill', 'tracking_url', 'handoff_timestamp', 'shipped_at',
-
-            # Refund info (optional)
-            'refund_id', 'refund_status', 'refunded_at', 'is_refunded',
-
+            'is_restocked', 'cancelable', 'items','refunds',
             'created_at', 'updated_at',
         ]
-
         read_only_fields = [
             'order_number', 'status', 'subtotal', 'delivery_charge', 'total',
             'is_paid', 'paid_at', 'created_at', 'updated_at',
-            'cancelled_by', 'is_restocked', 'tracking_url',
-            'refund_id', 'refund_status', 'refunded_at', 'is_refunded',
+            'cancelled_by', 'is_restocked',
         ]
 
     def get_cancelable(self, obj):
-        return obj.status in ['pending', 'processing'] and obj.status != 'cancelled'
-
+        return obj.status in ['pending', 'processing']
 
 class ShippingAddressInputSerializer(serializers.Serializer):
     full_name = serializers.CharField(max_length=100)
@@ -195,13 +199,30 @@ class OrderPaymentSerializer(serializers.Serializer):
         attrs['order'] = order
         return attrs
 
-
 class OrderItemSimpleSerializer(serializers.ModelSerializer):
     product_variant = ProductVariantSerializer(read_only=True)
 
     class Meta:
         model = OrderItem
-        fields = ['id', 'product_variant', 'quantity', 'price']
+        fields = [
+            'id',
+            'product_variant',
+            'quantity',
+            'price',
+            'status',
+            'courier',
+            'waybill',
+            'tracking_url',
+            'handoff_timestamp',
+            'shipped_at',
+        ]
+        read_only_fields = [
+            'status',
+            'tracking_url',
+            'handoff_timestamp',
+            'shipped_at',
+        ]
+
 
 class OrderDetailSerializer(serializers.ModelSerializer):
     shipping_address = ShippingAddressSerializer(read_only=True)
@@ -209,38 +230,33 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     items = serializers.SerializerMethodField()
     cancelable = serializers.SerializerMethodField()
     cancelled_by = serializers.StringRelatedField(read_only=True)
-    courier = serializers.StringRelatedField(read_only=True)
-    tracking_link = serializers.URLField(read_only=True)
-    handoff_timestamp = serializers.DateTimeField(read_only=True)
-    
+
     class Meta:
         model = Order
         fields = [
             'id', 'order_number', 'shipping_address', 'status',
-            'subtotal', 'total','delivery_charge',
+            'subtotal', 'total', 'delivery_charge',
             'payment_method', 'is_paid', 'is_restocked',
-            'tracking_number', 'paid_at',
-            'created_at', 'updated_at', 'promoter', 'items',
+            'paid_at', 'created_at', 'updated_at', 'promoter', 'items',
             'cancel_reason', 'cancelled_at', 'cancelled_by',
             'razorpay_order_id', 'razorpay_payment_id',
-            'cancelable','courier', 'tracking_link', 'handoff_timestamp'
+            'cancelable',
         ]
 
     def get_cancelable(self, obj):
-        return obj.status in ['pending', 'processing'] and obj.status != 'cancelled'
+        return obj.status in ['pending', 'processing']
 
     def get_items(self, obj):
         result = []
         return_requests = {rr.order_item_id: rr for rr in obj.return_requests.all()}
         replacement_requests = {rr.order_item_id: rr for rr in obj.replacement_requests.all()}
 
-        # Use order-level delivery timestamp
-        delivered_at = obj.handoff_timestamp  # or obj.shipped_at if you prefer
-
         for item in obj.items.all():
             variant = item.product_variant
             return_remaining_days = None
             replacement_remaining_days = None
+
+            delivered_at = item.shipped_at
 
             if delivered_at:
                 if variant.allow_return and variant.return_days:
@@ -250,62 +266,45 @@ class OrderDetailSerializer(serializers.ModelSerializer):
                     delta = (delivered_at + timedelta(days=variant.replacement_days)) - timezone.now()
                     replacement_remaining_days = max(delta.days, 0)
 
-            return_request = None
-            replacement_request = None
-            if item.id in return_requests:
-                rr = return_requests[item.id]
-                return_request = {
-                    "id": rr.id,
-                    "status": rr.status,
-                    "reason": rr.reason,
-                    "refund_amount": rr.refund_amount,
-                    "refund_method": rr.refund_method,
-                }
-            if item.id in replacement_requests:
-                rr = replacement_requests[item.id]
-                replacement_request = {
-                    "id": rr.id,
-                    "status": rr.status,
-                    "reason": rr.reason,
-                    "delivered_at": rr.delivered_at,
-                }
-
             result.append({
                 **OrderItemSimpleSerializer(item).data,
                 "return_remaining_days": return_remaining_days,
                 "replacement_remaining_days": replacement_remaining_days,
-                "return_request": return_request,
-                "replacement_request": replacement_request,
+                "tracking_url": item.tracking_url,
+                "courier": item.courier,
+                "waybill": item.waybill,
+                "shipped_at": item.shipped_at,
             })
-
         return result
+
 
 class OrderSummarySerializer(serializers.ModelSerializer):
     shipping_address = ShippingAddressSummarySerializer(read_only=True)
     first_item = serializers.SerializerMethodField()
-    courier = serializers.StringRelatedField(read_only=True)
-    tracking_link = serializers.URLField(read_only=True)
-    handoff_timestamp = serializers.DateTimeField(read_only=True)
 
     class Meta:
         model = Order
         fields = [
             "order_number", "shipping_address", "status",
-            "subtotal","total",
+            "subtotal", "total",
             "payment_method", "is_paid",
-            "tracking_number", "created_at", "updated_at", "first_item",
-            "refund_status", "refunded_at",'courier', 'tracking_link', 'handoff_timestamp'
+            "created_at", "updated_at", "first_item",
+            "refund_status", "refunded_at",
         ]
 
     def get_first_item(self, obj):
         item = obj.items.first()
-        if item and item.product_variant:
-            return {
-                "product_name": item.product_variant.product_name,
-                "variant_name": item.product_variant.variant_name,
-                "image": item.product_variant.images.first().image if item.product_variant.images.exists() else None
-            }
-        return None
+        if not item:
+            return None
+        return {
+            "product_name": item.product_variant.product_name,
+            "variant_name": item.product_variant.variant_name,
+            "image": item.product_variant.images.first().image if item.product_variant.images.exists() else None,
+            "tracking_url": item.tracking_url,
+            "courier": item.courier,
+            "waybill": item.waybill,
+        }
+
 
 
 class CustomerOrderListSerializer(serializers.ModelSerializer):
@@ -319,26 +318,25 @@ class CustomerOrderListSerializer(serializers.ModelSerializer):
             'order_number', 'shipping_address', 'status',
             'subtotal', 'total',
             'payment_method', 'is_paid',
-            'tracking_number', 'created_at', 'updated_at', 'items', 'refund_info'
+            'created_at', 'updated_at', 'items', 'refund_info'
         ]
 
     def get_refund_info(self, obj):
-        if not obj.refund_id:
+        refund = obj.refunds.last()
+        if not refund:
             return None
-
-        message = (
-            "Refund Processed – may take 5–7 days to reflect in your account."
-            if obj.refund_status == "processed"
-            else "Refund is in progress. Please check back later."
-        )
-
         return {
-            "refund_id": obj.refund_id,
-            "status": obj.refund_status,
-            "finalized": obj.refund_finalized,
-            "refunded_at": obj.refunded_at,
-            "message": message,
+            "refund_id": refund.refund_id,
+            "amount": refund.amount,
+            "status": refund.status,
+            "processed_at": refund.processed_at,
+            "message": (
+                "Refund processed successfully."
+                if refund.status == "processed"
+                else "Refund is being processed."
+            ),
         }
+
 
 class OrderPreviewInputSerializer(serializers.Serializer):
     items = serializers.ListField(
@@ -372,11 +370,15 @@ class OrderLightSerializer(serializers.ModelSerializer):
         fields = ['order_number', 'status', 'total', 'payment_method', 'created_at', 'is_paid', 'paid_at']
 
 
-class OrderitemLightSerializer(serializers.ModelSerializer):
+class OrderItemLightSerializer(serializers.ModelSerializer):
     product_variant = ProductVariantSerializer(read_only=True)
+
     class Meta:
         model = OrderItem
-        fields = ['id', 'quantity', 'price', 'product_variant']
+        fields = [
+            'id', 'quantity', 'price', 'product_variant',
+            'status', 'courier', 'waybill', 'tracking_url', 'shipped_at'
+        ]
 
 
 class ShipmentTrackingSerializer(serializers.Serializer):

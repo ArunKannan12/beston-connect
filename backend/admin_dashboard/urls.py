@@ -18,7 +18,8 @@ from .views import (
                     BannerCreateAPIView,
                     BannerUpdateDestroyAPIView,
                     VariantBulkActionAPIView,
-                    AdminMarkAsShippedAPIView
+                   
+                    DelhiveryWebhookAPIView,
                     )
 from orders.returnReplacement import ReturnRequestUpdateAPIView,ReplacementRequestUpdateAPIView
 
@@ -47,7 +48,8 @@ urlpatterns = [
     path("admin/banners/", AdminBannerListAPIView.as_view(), name="admin-banner-list"),
     path("admin/banners/create/", BannerCreateAPIView.as_view(), name="banner-create"),
     path("admin/banners/<int:pk>/", BannerUpdateDestroyAPIView.as_view(), name="banner-update-destroy"),
-    path("admin/orders/<str:order_number>/ship/", AdminMarkAsShippedAPIView.as_view(), name="admin-mark-shipped"),
+   
+    path("webhook/delhivery/", DelhiveryWebhookAPIView.as_view(), name="delhivery-webhook"),
 ]
 
 

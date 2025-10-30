@@ -39,12 +39,14 @@ class OrderStatus(models.TextChoices):
     PENDING = 'pending', 'Pending'
     PROCESSING = 'processing', 'Processing'
     SHIPPED = 'shipped', 'Shipped'
-    DELIVERED='delivered','Delivered'
+    DELIVERED = 'delivered', 'Delivered'
     CANCELLED = 'cancelled', 'Cancelled'
+
 
 # ---------------- Payment Method ----------------
 class PaymentMethod(models.TextChoices):
     RAZORPAY = 'Razorpay', 'Razorpay'  # Only prepaid
+
 
 # ---------------- Order Number Generator ----------------
 def generate_order_number():
@@ -53,134 +55,94 @@ def generate_order_number():
         if not Order.objects.filter(order_number=number).exists():
             return number
 
+
+# ---------------- Order ----------------
 class Order(models.Model):
-    # -------------------- Basic Info --------------------
+    # --- Basic Info ---
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     shipping_address = models.ForeignKey(ShippingAddress, on_delete=models.CASCADE)
 
-    # -------------------- Status & Payment --------------------
-    status = models.CharField(
-        max_length=30, choices=OrderStatus.choices, default=OrderStatus.PENDING
-    )
-    payment_method = models.CharField(
-        max_length=50, choices=PaymentMethod.choices, default=PaymentMethod.RAZORPAY
-    )
+    # --- Status & Payment ---
+    status = models.CharField(max_length=30, choices=OrderStatus.choices, default=OrderStatus.PENDING)
+    payment_method = models.CharField(max_length=50, choices=PaymentMethod.choices, default=PaymentMethod.RAZORPAY)
     is_paid = models.BooleanField(default=False)
     paid_at = models.DateTimeField(null=True, blank=True)
     razorpay_order_id = models.CharField(max_length=100, null=True, blank=True)
     razorpay_payment_id = models.CharField(max_length=100, null=True, blank=True)
 
-    # -------------------- Pricing --------------------
+    # --- Pricing ---
     subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
     delivery_charge = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
     total_commission = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
     total = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
-    promoter = models.ForeignKey(Promoter, on_delete=models.SET_NULL, null=True, blank=True)
+    promoter = models.ForeignKey("promoter.Promoter", on_delete=models.SET_NULL, null=True, blank=True)
 
-    # -------------------- Courier / Shipping --------------------
-    waybill = models.CharField(max_length=50, blank=True, null=True)
-    courier = models.CharField(max_length=50, blank=True, null=True)
-    tracking_url = models.URLField(blank=True, null=True)  # customer-facing link
-    handoff_timestamp = models.DateTimeField(null=True, blank=True)
-    shipped_at = models.DateTimeField(null=True, blank=True)
-
-    # -------------------- Cancellation & Refunds --------------------
+    # --- Cancellation ---
     cancel_reason = models.TextField(null=True, blank=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
-    cancelled_by = models.ForeignKey(
-        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="cancelled_orders"
-    )
+    cancelled_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="cancelled_orders")
     cancelled_by_role = models.CharField(max_length=50, null=True, blank=True)
-
-    refund_id = models.CharField(max_length=100, null=True, blank=True)
-    refund_status = models.CharField(max_length=50, null=True, blank=True)
-    refunded_at = models.DateTimeField(null=True, blank=True)
-    is_refunded = models.BooleanField(default=False)
     is_restocked = models.BooleanField(default=False)
 
-    # -------------------- Meta --------------------
+    # --- Refund summary ---
+    has_refund = models.BooleanField(default=False)  # ✅ New summary flag (auto updated via signal)
+
+    # --- Meta ---
     order_number = models.CharField(max_length=20, unique=True, editable=False, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    # -------------------- Core Methods --------------------
     def __str__(self):
         return f"Order #{self.order_number} ({self.user.email} — {self.status})"
 
     def save(self, *args, **kwargs):
-        # Auto-generate order number if not set
         if not self.order_number:
             self.order_number = generate_order_number()
-
-        # Auto-generate tracking URL (public, customer-facing)
-        if self.waybill and not self.tracking_url:
-            self.tracking_url = f"https://www.delhivery.com/tracking?waybill={self.waybill}"
-
         super().save(*args, **kwargs)
-
-    # -------------------- Properties --------------------
-    @property
-    def delhivery_public_tracking_url(self):
-        """Public URL (for customer tracking, no login needed)."""
-        if not self.waybill:
-            return None
-        return f"https://www.delhivery.com/tracking?waybill={self.waybill}"
-
-    @property
-    def delhivery_api_tracking_url(self):
-        """Backend tracking API endpoint (requires token)."""
-        base = "https://track.delhivery.com/api/v1/packages/json/"
-        if self.waybill:
-            return f"{base}?waybill={self.waybill}"
-        if self.order_number:
-            return f"{base}?ref_ids={self.order_number}"
-        return None
 
     @property
     def is_fully_cancelled(self):
-        """Returns True if all order items are cancelled."""
         return self.items.exclude(status="cancelled").count() == 0
 
     @property
     def is_partially_cancelled(self):
-        """Returns True if some but not all items are cancelled."""
         total_items = self.items.count()
         cancelled_items = self.items.filter(status="cancelled").count()
         return 0 < cancelled_items < total_items
 
 
+# ---------------- Order Item ----------------
 class OrderItemStatus(models.TextChoices):
     PENDING = 'pending', 'Pending'
+    PROCESSING = 'processing', 'Processing'  # ✅ add this
     SHIPPED = 'shipped', 'Shipped'
     DELIVERED = 'delivered', 'Delivered'
     CANCELLED = 'cancelled', 'Cancelled'
+    REFUNDED = 'refunded', 'Refunded'
 
-# ---------------- Order Item ----------------
-# ---------------- Order Item ----------------
+
 class OrderItem(models.Model):
-    order = models.ForeignKey(
-        Order, on_delete=models.CASCADE, related_name="items"
-    )
-    product_variant = models.ForeignKey(ProductVariant, on_delete=models.CASCADE)
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="items")
+    product_variant = models.ForeignKey("products.ProductVariant", on_delete=models.CASCADE)
     quantity = models.PositiveIntegerField(default=1)
-    status = models.CharField(
-        max_length=20,
-        choices=OrderItemStatus.choices,
-        default=OrderItemStatus.PENDING
-    )
+    status = models.CharField(max_length=20, choices=OrderItemStatus.choices, default=OrderItemStatus.PENDING)
     price = models.DecimalField(max_digits=10, decimal_places=2)
 
-    # Promoter commission
-    promoter = models.ForeignKey(Promoter, on_delete=models.SET_NULL, null=True, blank=True)
-    promoter_commission_rate = models.DecimalField(
-        max_digits=5, decimal_places=2, default=0
-    )  # %
-    promoter_commission_amount = models.DecimalField(
-        max_digits=10, decimal_places=2, default=0
-    )  # absolute
+    # --- Promoter Commission ---
+    promoter = models.ForeignKey("promoter.Promoter", on_delete=models.SET_NULL, null=True, blank=True)
+    promoter_commission_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    promoter_commission_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
+    # --- Cancellation & Refunds ---
     cancel_reason = models.TextField(blank=True, null=True)
     refund_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+
+    # --- Courier / Shipping ---
+    courier = models.CharField(max_length=50, blank=True, null=True)
+    waybill = models.CharField(max_length=50, blank=True, null=True)
+    tracking_url = models.URLField(blank=True, null=True)
+    handoff_timestamp = models.DateTimeField(null=True, blank=True)
+    shipped_at = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -195,6 +157,27 @@ class OrderItem(models.Model):
     @property
     def is_active(self):
         return self.status not in [OrderItemStatus.CANCELLED, OrderItemStatus.REFUNDED]
+
+    @property
+    def delhivery_tracking_url(self):
+        if self.waybill:
+            return f"https://www.delhivery.com/tracking?waybill={self.waybill}"
+        return None
+
+
+# ---------------- Refund ----------------
+class Refund(models.Model):
+    order = models.ForeignKey(Order, related_name="refunds", on_delete=models.CASCADE)
+    refund_id = models.CharField(max_length=100, blank=True, null=True)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    status = models.CharField(max_length=50, default="pending")
+    created_at = models.DateTimeField(auto_now_add=True)
+    processed_at = models.DateTimeField(blank=True, null=True)
+    notes = models.TextField(blank=True, null=True)
+
+    def __str__(self):
+        return f"{self.refund_id or 'Pending'} - ₹{self.amount}"
+
 
 class ReturnRequest(models.Model):
     STATUS_CHOICES = [

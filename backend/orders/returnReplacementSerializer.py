@@ -1,12 +1,12 @@
 
 from rest_framework import serializers
-from .serializers import OrderitemLightSerializer,OrderLightSerializer,ShippingAddressSerializer
+from .serializers import OrderItemLightSerializer,OrderLightSerializer,ShippingAddressSerializer
 from .models import ReturnRequest,ReplacementRequest,Order,OrderItem
 from django.utils import timezone
 
 class ReturnRequestSerializer(serializers.ModelSerializer):
     order = OrderLightSerializer(read_only=True)
-    order_item = OrderitemLightSerializer(read_only=True)
+    order_item = OrderItemLightSerializer(read_only=True)
     shipping_address = serializers.SerializerMethodField(read_only=True)
     product = serializers.SerializerMethodField(read_only=True)
     variant = serializers.SerializerMethodField(read_only=True)
@@ -117,7 +117,7 @@ class ReturnRequestSerializer(serializers.ModelSerializer):
 
 class ReplacementRequestSerializer(serializers.ModelSerializer):
     order = OrderLightSerializer(read_only=True)
-    order_item = OrderitemLightSerializer(read_only=True)
+    order_item = OrderItemLightSerializer(read_only=True)
     new_order = OrderLightSerializer(read_only=True)
     shipping_address = serializers.SerializerMethodField(read_only=True)
     product = serializers.SerializerMethodField(read_only=True)

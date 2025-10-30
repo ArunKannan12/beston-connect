@@ -35,39 +35,60 @@ def send_multichannel_notification(user,order=None,order_item=None,event=None,me
 # -------------------------
 # ORDER NOTIFICATIONS
 # -------------------------
+
 @receiver(post_save, sender=Order)
 def handle_order_notifications(sender, instance, created, **kwargs):
     """
-    Handles notifications for:
-    - Order placement (after payment)
-    - Order shipment (via Delhivery)
-    - Order cancellation
-    - Order refund
+    Handles order notifications:
+    - Order placed (after payment)
+    - Processing (packing/ready)
+    - Shipped (after courier pickup)
+    - Delivered
+    - Cancelled
+    - Refunded
     """
-
-    # Skip on creation — only handle updates
-    if created:
-        return
 
     user = instance.user
     order_number = instance.order_number
 
-    # ✅ ORDER PLACED (After successful payment)
-    if instance.status == "paid":
-        if not Notification.objects.filter(order=instance, event="order_placed").exists():
-            send_multichannel_notification(
-                user=user,
-                order=instance,
-                event="order_placed",
-                message=(
-                    f"✅ Your order {order_number} has been placed successfully.\n"
-                    f"Total Amount (incl. delivery): ₹{float(instance.total):.2f}"
-                ),
-                channels=["email"],
-            )
+    # ✅ ORDER PLACED
+    if (
+        instance.status == "pending"
+        and instance.is_paid
+        and not Notification.objects.filter(order=instance, event="order_placed").exists()
+    ):
+        send_multichannel_notification(
+            user=user,
+            order=instance,
+            event="order_placed",
+            message=(
+                f"✅ Your order {order_number} has been placed successfully.\n"
+                f"Total Amount: ₹{float(instance.total):.2f}"
+            ),
+            channels=["email"],
+        )
 
-    # 🚚 ORDER SHIPPED (When waybill is generated)
-    elif getattr(instance, "waybill", None) and not Notification.objects.filter(order=instance, event="order_shipped").exists():
+    # ⚙️ ORDER PROCESSING
+    elif (
+        instance.status == "processing"
+        and not Notification.objects.filter(order=instance, event="order_processing").exists()
+    ):
+        send_multichannel_notification(
+            user=user,
+            order=instance,
+            event="order_processing",
+            message=(
+                f"🧑‍🏭 Your order {order_number} is now being processed and packed for shipment."
+            ),
+            channels=["email"],
+        )
+
+    # 🚚 ORDER SHIPPED (Triggered after Delhivery pickup → waybill scan)
+    elif (
+        instance.status == "shipped"
+        and getattr(instance, "waybill", None)
+        and not Notification.objects.filter(order=instance, event="order_shipped").exists()
+    ):
         send_multichannel_notification(
             user=user,
             order=instance,
@@ -75,17 +96,33 @@ def handle_order_notifications(sender, instance, created, **kwargs):
             message=(
                 f"🚚 Your order {order_number} has been shipped via Delhivery.\n"
                 f"Tracking ID: {instance.waybill}\n"
-                f"Track here: https://track.delhivery.com/p/{instance.waybill}"
+                f"Track here: https://www.delhivery.com/track/package/{instance.waybill}/"
             ),
             channels=["email"],
         )
 
-    # ❌ ORDER CANCELLED
-    elif instance.status == "cancelled" and not Notification.objects.filter(order=instance, event="cancelled").exists():
+    # ✅ ORDER DELIVERED
+    elif (
+        instance.status == "delivered"
+        and not Notification.objects.filter(order=instance, event="order_delivered").exists()
+    ):
         send_multichannel_notification(
             user=user,
             order=instance,
-            event="cancelled",
+            event="order_delivered",
+            message=f"✅ Your order {order_number} has been delivered successfully.",
+            channels=["email"],
+        )
+
+    # ❌ ORDER CANCELLED
+    elif (
+        instance.status == "cancelled"
+        and not Notification.objects.filter(order=instance, event="order_cancelled").exists()
+    ):
+        send_multichannel_notification(
+            user=user,
+            order=instance,
+            event="order_cancelled",
             message=(
                 f"❌ Your order {order_number} has been cancelled.\n"
                 f"Reason: {instance.cancel_reason or 'No reason provided.'}"
@@ -93,8 +130,11 @@ def handle_order_notifications(sender, instance, created, **kwargs):
             channels=["email"],
         )
 
-    # 💰 ORDER REFUNDED (Triggered automatically when refund is processed)
-    elif instance.is_refunded and not Notification.objects.filter(order=instance, event="order_refunded").exists():
+    # 💰 REFUND INITIATED
+    elif (
+        instance.is_refunded
+        and not Notification.objects.filter(order=instance, event="order_refunded").exists()
+    ):
         send_multichannel_notification(
             user=user,
             order=instance,
@@ -107,6 +147,7 @@ def handle_order_notifications(sender, instance, created, **kwargs):
             ),
             channels=["email"],
         )
+
 
 # -------------------------
 # ORDER ITEM STATUS UPDATES

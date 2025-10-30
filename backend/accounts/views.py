@@ -689,28 +689,53 @@ import os
 
 @csrf_exempt
 def create_temp_superuser(request):
-    secret = request.GET.get('key')
-    if secret != os.getenv("SUPERUSER_SECRET_KEY"):
-        return HttpResponse("Unauthorized", status=401)
+    if request.method == "GET":
+        # Simple HTML form
+        return HttpResponse("""
+            <form method='post'>
+                <h2>Create Temporary Superuser</h2>
+                <label>Secret Key:</label><br>
+                <input type='password' name='key' required><br><br>
+                <label>Email:</label><br>
+                <input type='email' name='email' required><br><br>
+                <label>Password:</label><br>
+                <input type='password' name='password' required><br><br>
+                <label>First Name:</label><br>
+                <input type='text' name='first_name' value='Admin'><br><br>
+                <label>Last Name:</label><br>
+                <input type='text' name='last_name' value='User'><br><br>
+                <button type='submit'>Create Superuser</button>
+            </form>
+        """)
 
-    User = get_user_model()
-    email = os.getenv("TEMP_SUPERUSER_EMAIL")
-    password = os.getenv("TEMP_SUPERUSER_PASSWORD")
-    first_name = os.getenv("TEMP_SUPERUSER_FIRST_NAME", "Admin")
-    last_name = os.getenv("TEMP_SUPERUSER_LAST_NAME", "User")
+    elif request.method == "POST":
+        secret = request.POST.get("key")
+        if secret != os.getenv("SUPERUSER_SECRET_KEY"):
+            return HttpResponse("❌ Unauthorized: Invalid secret key", status=401)
 
-    if User.objects.filter(email=email).exists():
-        return HttpResponse("Superuser already exists")
+        email = request.POST.get("email")
+        password = request.POST.get("password")
+        first_name = request.POST.get("first_name", "Admin")
+        last_name = request.POST.get("last_name", "User")
 
-    User.objects.create_superuser(
-        email=email,
-        first_name=first_name,
-        last_name=last_name,
-        password=password,
-        is_verified=True,
-        role="admin"
-    )
-    return HttpResponse("Superuser created successfully")
+        User = get_user_model()
+        if User.objects.filter(email=email).exists():
+            return HttpResponse("⚠️ Superuser already exists with this email.")
+
+        User.objects.create_superuser(
+            email=email,
+            first_name=first_name,
+            last_name=last_name,
+            password=password,
+            is_verified=True,
+            role="admin"
+        )
+
+        return HttpResponse("✅ Superuser created successfully!")
+
+    else:
+        return HttpResponse("Method not allowed", status=405)
+
 
 class SwitchActiveRoleAPIView(APIView):
     permission_classes = [IsAuthenticated]

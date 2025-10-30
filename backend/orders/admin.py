@@ -1,16 +1,26 @@
 
 # delivery/admin.py
 from django.contrib import admin
-from .models import Order, OrderItem, ShippingAddress
+from .models import Order, OrderItem, ShippingAddress,Refund
 
 # -------------------- INLINE --------------------
 class OrderItemInline(admin.TabularInline):
     """Show OrderItems inside the Order admin page"""
     model = OrderItem
     extra = 0
-    readonly_fields = ("product_variant", "quantity", "price", "status", "refund_amount")
+    readonly_fields = (
+        "product_variant",
+        "quantity",
+        "price",
+        "status",
+        "refund_amount",
+        "courier",
+        "waybill",
+        "tracking_url",
+        "shipped_at",
+        "handoff_timestamp",
+    )
     can_delete = False
-
 # -------------------- ORDER --------------------
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
@@ -21,29 +31,15 @@ class OrderAdmin(admin.ModelAdmin):
         "total",
         "payment_method",
         "is_paid",
-        "is_refunded",
-        "waybill",
-        "courier",
-        "tracking_url",
         "paid_at",
         "created_at",
     )
-    list_filter = ("status", "is_paid", "is_refunded", "payment_method", "created_at")
+    list_filter = ("status", "is_paid","payment_method", "created_at")
     search_fields = (
         "order_number",
         "user__email",
-        "waybill",
-        "courier",
     )
-    readonly_fields = (
-        "created_at",
-        "updated_at",
-        "paid_at",
-        "refunded_at",
-        "refund_status",
-        "refund_id",
-        "tracking_url",
-    )
+    readonly_fields = ("order_number", "created_at", "updated_at", "paid_at")
     inlines = [OrderItemInline]
     ordering = ("-created_at",)
 
@@ -57,14 +53,25 @@ class OrderItemAdmin(admin.ModelAdmin):
         "quantity",
         "price",
         "status",
+        "courier",
+        "waybill",
+        "tracking_url",
         "refund_amount",
+        "shipped_at",
     )
     search_fields = (
         "order__order_number",
         "product_variant__product__name",
         "product_variant__sku",
+        "waybill",
+        "courier",
     )
-    readonly_fields = ("refund_amount",)
+    readonly_fields = (
+        "refund_amount",
+        "tracking_url",
+        "shipped_at",
+        "handoff_timestamp",
+    )
 
 # -------------------- SHIPPING ADDRESS --------------------
 @admin.register(ShippingAddress)
@@ -73,6 +80,20 @@ class ShippingAddressAdmin(admin.ModelAdmin):
     list_filter = ("country", "city")
     search_fields = ("user__email", "full_name", "city", "country")
 
+@admin.register(Refund)
+class RefundAdmin(admin.ModelAdmin):
+    list_display = (
+        "refund_id",
+        "order",
+        "amount",
+        "status",
+        "created_at",
+        "processed_at",
+    )
+    list_filter = ("status", "created_at")
+    search_fields = ("refund_id", "order__order_number", "order__user__email")
+    readonly_fields = ("created_at", "processed_at")
+    ordering = ("-created_at",)
 # -------------------- RETURN REQUEST --------------------
 # @admin.register(ReturnRequest)
 # class ReturnRequestAdmin(admin.ModelAdmin):
