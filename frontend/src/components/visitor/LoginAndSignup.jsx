@@ -166,38 +166,71 @@ const LoginAndSignup = () => {
     re_password: signupData.re_password,
   };
   const handleSignupSubmit = async (e) => {
-    e.preventDefault();
-    const errors = validateSignup();
-    if (Object.keys(errors).length > 0) {
-      setSignupErrors(errors);
-      return;
+  e.preventDefault();
+  const errors = validateSignup();
+  if (Object.keys(errors).length > 0) {
+    console.log("❌ Validation errors:", errors);
+    setSignupErrors(errors);
+    return;
+  }
+
+  try {
+    setLoading(true);
+    console.log("🚀 Sending signup payload:", payload);
+    const res = await axiosInstance.post("auth/users/", payload);
+
+    console.log("✅ Signup response:", res);
+
+    if (res.status === 201) {
+      const { needs_activation, email } = res.data;
+      console.log("📩 Parsed response:", res.data);
+
+      if (needs_activation) {
+        toast.info("Your account has been created but isn't activated yet. Please check your email.");
+        const from = location.state?.from || "/";
+        console.log("🔄 Redirecting to verify-email:", { email, from });
+        navigate("/verify-email", { state: { email, from } });
+      } else {
+        toast.success("Registration successful!");
+        console.log("🎉 New user registered successfully!");
+        navigate("/");
+      }
+    } else {
+      console.log("⚠️ Unexpected status code:", res.status);
     }
 
-    try {
-      setLoading(true);
-      const res = await axiosInstance.post("auth/users/", payload);
-      if (res.status === 201) {
-        toast.success("Registration successful! Please check your email to verify.");
-        setSignupErrors({});
-        const from = location.state?.from || "/";
-        setTimeout(() => navigate("/verify-email", { state: { email: signupData.email, from } }), 200);
+  } catch (err) {
+    console.log("❗Signup error caught:", err);
+
+    if (err.response?.data) {
+      console.log("⚠️ Error response from backend:", err.response.data);
+
+      if (err.response.data?.needs_activation) {
+        toast.info("Your account exists but isn't activated. Please check your email.");
+        console.log("🔄 Redirecting to verify-email (inactive account):", signupData.email);
+        navigate("/verify-email", { state: { email: signupData.email } });
+        return;
       }
-    } catch (err) {
-      console.log(err);
-      
-      if (err.response?.data) {
-        const apiErrors = {};
-        for (const key in err.response.data) {
-          apiErrors[key] = Array.isArray(err.response.data[key])
-            ? err.response.data[key][0]
-            : err.response.data[key];
-        }
-        setSignupErrors(apiErrors);
-      } else setSignupErrors({ api: "Registration failed. Please try again later." });
-    } finally {
-      setLoading(false);
+
+      const apiErrors = {};
+      for (const key in err.response.data) {
+        apiErrors[key] = Array.isArray(err.response.data[key])
+          ? err.response.data[key][0]
+          : err.response.data[key];
+      }
+      console.log("🧩 Parsed API errors:", apiErrors);
+      setSignupErrors(apiErrors);
+    } else {
+      console.log("💥 Network or unknown error:", err);
+      setSignupErrors({ api: "Registration failed. Please try again later." });
     }
-  };
+
+  } finally {
+    setLoading(false);
+    console.log("🕒 Signup process finished (loading stopped).");
+  }
+};
+
 
   // Focus input and redirect if authenticated
   useEffect(() => {

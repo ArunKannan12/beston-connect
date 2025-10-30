@@ -42,9 +42,6 @@ from django.utils.decorators import method_decorator
 
 User = get_user_model()
 
-secure=settings.DEBUG is False
-
-
 class ResendActivationEmailView(generics.GenericAPIView):
     serializer_class = ResendActivationEmailSerializer
     permission_classes = []
@@ -55,6 +52,7 @@ class ResendActivationEmailView(generics.GenericAPIView):
 
         email_address = serializer.validated_data['email']
 
+        # --- Check if user exists ---
         try:
             user = CustomUser.objects.get(email=email_address)
         except CustomUser.DoesNotExist:
@@ -63,20 +61,14 @@ class ResendActivationEmailView(generics.GenericAPIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        now = timezone.now()
+        # --- Check activation status ---
+        # --- Check bans and rate limits ---
         if user.is_permanently_banned:
             return Response(
                 {'detail': 'Your account has been permanently banned due to repeated abuse.'},
                 status=status.HTTP_403_FORBIDDEN
             )
-        
-        if user.is_active and user.is_verified:
-            return Response(
-                {'detail': 'User is already activated and verified.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        now = timezone.now()
-
         if user.blocked_until and now < user.blocked_until:
             remaining = int((user.blocked_until - now).total_seconds())
             return Response(
@@ -84,13 +76,21 @@ class ResendActivationEmailView(generics.GenericAPIView):
                 status=status.HTTP_403_FORBIDDEN
             )
         
+        if user.is_active and user.is_verified:
+            return Response({'detail': 'User is already activated and verified.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not user.is_active and not user.is_verified:
+            pass  # Proceed
+        else:
+            return Response({'detail': 'Cannot resend activation for this account.'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+
         one_hour_ago = now - timedelta(hours=1)
         recent_logs = ActivationEmailLog.objects.filter(user=user, sent_at__gte=one_hour_ago)
 
         if recent_logs.count() >= 5:
             user.block_count += 1
-
-            # Progressive block durations: 15 min, 1 hour, 24 hours
             block_durations = [
                 timedelta(minutes=15),
                 timedelta(hours=1),
@@ -100,7 +100,6 @@ class ResendActivationEmailView(generics.GenericAPIView):
             if user.block_count <= len(block_durations):
                 user.blocked_until = now + block_durations[user.block_count - 1]
             else:
-                # Permanent ban after exceeding blocks
                 user.is_permanently_banned = True
                 user.blocked_until = None
                 user.save(update_fields=['block_count', 'blocked_until', 'is_permanently_banned'])
@@ -110,14 +109,13 @@ class ResendActivationEmailView(generics.GenericAPIView):
                 )
 
             user.save(update_fields=['block_count', 'blocked_until'])
-            block_time = user.blocked_until - now
-            minutes = int(block_time.total_seconds() / 60)
+            minutes = int((user.blocked_until - now).total_seconds() / 60)
             return Response(
                 {'detail': f'Too many resend attempts. Your account has been temporarily disabled for {minutes} minutes.'},
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        # Exponential cooldown logic
+        # --- Cooldown logic ---
         base_cooldown = 10  # seconds
         exponential_factor = min(recent_logs.count(), 4)
         cooldown_duration = timedelta(seconds=base_cooldown * (2 ** exponential_factor))
@@ -129,7 +127,7 @@ class ResendActivationEmailView(generics.GenericAPIView):
                 status=status.HTTP_429_TOO_MANY_REQUESTS
             )
 
-        # Send activation email
+        # --- Send activation email ---
         token = default_token_generator.make_token(user)
         context = {
             "user": user,
@@ -145,7 +143,7 @@ class ResendActivationEmailView(generics.GenericAPIView):
             user=user,
         )
         activation_email.send(to=[user.email])
-       
+
         user.last_activation_email_sent = now
         user.save(update_fields=['last_activation_email_sent'])
 
@@ -155,7 +153,14 @@ class ResendActivationEmailView(generics.GenericAPIView):
             user_agent=request.META.get('HTTP_USER_AGENT')
         )
 
-        return Response({'detail': 'Activation email resent.'}, status=status.HTTP_200_OK)
+        # --- ✅ Return response that frontend can use to redirect ---
+        return Response(
+            {
+                'detail': 'Activation email resent successfully.',
+                'needs_activation': True  # <--- frontend uses this to redirect
+            },
+            status=status.HTTP_200_OK
+        )
 
     
 class CustomPasswordResetView(generics.GenericAPIView):
@@ -566,8 +571,6 @@ def custom_jwt_view(request):
     access_token = request.COOKIES.get('access_token')
     refresh_token = request.COOKIES.get('refresh_token')
     
-    print("Access token:", access_token)
-    print("Refresh token:", refresh_token)
     
     return JsonResponse({
         "access_token": access_token,

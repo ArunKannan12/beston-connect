@@ -206,30 +206,40 @@ REST_FRAMEWORK = {
 }
 
 LOGGING = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "handlers": {
-        "console": {
-            "class": "logging.StreamHandler",
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '[{levelname}] {asctime} {name}: {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '[{levelname}] {name}: {message}',
+            'style': '{',
         },
     },
-    "root": {
-        "handlers": ["console"],
-        "level": "DEBUG",  # 👈 set DEBUG globally
-    },
-    "loggers": {
-        "admin_dashboard": {   # 👈 match the logger name you used
-            "handlers": ["console"],
-            "level": "DEBUG",
-            "propagate": False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple',
         },
-        "django": {
-            "handlers": ["console"],
-            "level": "INFO",   # keep Django logs cleaner
-            "propagate": True,
+    },
+    'loggers': {
+        'accounts': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+        # Optional: also show other logs
+        'django': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': True,
         },
     },
 }
+
+
 
 from datetime import timedelta
 SIMPLE_JWT = {
@@ -288,13 +298,14 @@ DJOSER = {
     'USER_ID_FIELD': 'email',
     'PASSWORD_RESET_URL': '/password/reset/',
     'SERIALIZERS': {
-        'user_create': 'accounts.serializers.CustomUserCreateSerializer',  # For creation
+        'user_create': 'accounts.serializers.CustomUserCreateSerializer',
+        'user_create_password_retype': 'accounts.serializers.CustomUserCreatePasswordRetypeSerializer',  # For creation
         'user_login': 'accounts.serializers.UserLoginSerializer',
         'password_reset': 'accounts.serializers.CustomPasswordResetSerializer',
         'password_reset_confirm': 'accounts.serializers.CustomPasswordResetConfirmSerializer',
         'password_change': 'accounts.serializers.CustomPasswordChangeSerializer',
-        'user': 'accounts.serializers.RoleBasedUserSerializer',       # role-based
-        'current_user': 'accounts.serializers.RoleBasedUserSerializer', # role-based
+        'user': 'accounts.serializers.RoleBasedUserDisplaySerializer',       # role-based
+        'current_user': 'accounts.serializers.RoleBasedUserDisplaySerializer', # role-based
         'user_delete': 'djoser.serializers.UserDeleteSerializer',
         'set_password': 'accounts.serializers.CustomSetPasswordSerializer',
     },
