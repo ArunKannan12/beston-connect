@@ -311,7 +311,7 @@ class GoogleAuthView(APIView):
                 key='access_token',
                 value=access_token,
                 httponly=True,
-                secure = not settings.DEBUG,
+                secure = True,
                 samesite='None',
                 max_age=3600
             )
@@ -319,7 +319,7 @@ class GoogleAuthView(APIView):
                 key='refresh_token',
                 value=refresh_token,
                 httponly=True,
-                secure = not settings.DEBUG,
+                secure = True,
                 samesite='None',
                 max_age=7*24*60*60
 
@@ -440,7 +440,7 @@ class FacebookLoginView(GenericAPIView):
                 key='access_token',
                 value=access_token,
                 httponly=True,
-                secure = not settings.DEBUG,
+                secure = True,
                 samesite='None',
                 max_age=3600
             )
@@ -448,7 +448,7 @@ class FacebookLoginView(GenericAPIView):
                 key='refresh_token',
                 value=refresh_token,
                 httponly=True,
-                secure = not settings.DEBUG,
+                secure = True,
                 samesite='None',
                 max_age=7*24*60*60,
                 path='/'
