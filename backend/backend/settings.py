@@ -56,7 +56,7 @@ INSTALLED_APPS = [
     'cloudinary',
     'cloudinary_storage',
     'django_extensions',
-    'anymail'
+    
 ]
 
 
@@ -340,23 +340,21 @@ CORS_ALLOWED_ORIGINS = [
 CSRF_COOKIE_NAME = 'csrftoken'
 CSRF_HEADER_NAME = "X-CSRFToken"
 
-# Email settings based on environment
 if ENVIRONMENT == "production":
-    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-    EMAIL_HOST = "smtp-relay.brevo.com"
-    EMAIL_PORT = 587
-    EMAIL_USE_TLS = True
-    EMAIL_USE_SSL = False
-    EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
-    EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
-    DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER)
+    # --- Brevo SMTP setup ---
+    INSTALLED_APPS += ["anymail"]
+    EMAIL_BACKEND = "anymail.backends.brevo.EmailBackend"
     ANYMAIL = {
-        "MAILGUN_API_KEY": os.getenv("MAILGUN_API_KEY"),
-        "MAILGUN_SENDER_DOMAIN": "sandbox8918026a05ee43068da17c71e906f261.mailgun.org",
+        "BREVO_API_KEY": os.getenv("BREVO_API_KEY"),
+        "SEND_DEFAULTS": {
+            "track_opens": True,
+            "track_clicks": True,
+        },
     }
+    DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL")
 
 else:
-    # Local / development - MailHog
+    # --- Local / development (MailHog or Console) ---
     EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
     EMAIL_HOST = "localhost"
     EMAIL_PORT = 1025
@@ -365,6 +363,7 @@ else:
     EMAIL_USE_TLS = False
     EMAIL_USE_SSL = False
     DEFAULT_FROM_EMAIL = "noreply@example.com"
+
 
 SOCIAL_AUTH_GOOGLE_OAUTH2_KEY=env("SOCIAL_AUTH_GOOGLE_OAUTH2_KEY")
 SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET=env("SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET")
