@@ -70,24 +70,7 @@ class BaseUserSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
-class ActivationEmailMixin:
-    def send_activation_email(self, user):
-        from django.conf import settings
-
-        uid = urlsafe_base64_encode(force_bytes(user.pk))
-        token = default_token_generator.make_token(user)
-
-        context = {
-            "user": user,
-            "uid": uid,
-            "token": token,
-            "site": settings.FRONTEND_URL,
-            "activation_url": f"{settings.FRONTEND_URL.rstrip('/')}/activation/{uid}/{token}/",
-        }
-
-        CustomActivationEmail(context=context, user=user).send(to=[user.email])
-
-class CustomUserCreateSerializer(BaseUserCreateSerializer, ActivationEmailMixin):
+class CustomUserCreateSerializer(BaseUserCreateSerializer):
     email = serializers.EmailField(required=True)
 
     class Meta(BaseUserCreateSerializer.Meta):
@@ -109,16 +92,14 @@ class CustomUserCreateSerializer(BaseUserCreateSerializer, ActivationEmailMixin)
     def create(self, validated_data):
         inactive_user = self.context.get("inactive_user")
 
-        # Case 1: Inactive user already exists → resend activation
+        # Case 1: Inactive user already exists → Djoser will handle re-sending activation
         if inactive_user:
-            self.send_activation_email(inactive_user)
             self.context["activation_resent"] = True
             return inactive_user
 
         # Case 2: Fresh signup → create new user
         user = User.objects.create_user(**validated_data)
         user.assign_role("customer", set_active=True)
-        self.send_activation_email(user)
         self.context["activation_resent"] = False
         return user
 
@@ -137,6 +118,7 @@ class CustomUserCreateSerializer(BaseUserCreateSerializer, ActivationEmailMixin)
             data["message"] = "Account already exists but not activated. Activation email re-sent."
         else:
             data["reactivation"] = False
+            data["message"] = "Account created successfully. Please check your email to activate your account."
 
         return data
 
@@ -230,7 +212,6 @@ class CustomUserCreatePasswordRetypeSerializer(UserCreatePasswordRetypeSerialize
 
         if existing_user:
             if not existing_user.is_active or not getattr(existing_user, "is_verified", False):
-                # store for create()
                 self.context["inactive_user"] = existing_user
                 return attrs
 
@@ -244,25 +225,13 @@ class CustomUserCreatePasswordRetypeSerializer(UserCreatePasswordRetypeSerialize
         inactive_user = self.context.get("inactive_user")
 
         if inactive_user:
-            # ✅ re-send activation mail for inactive user
-            self.send_activation_email(inactive_user)
             self.context["reactivation"] = True
             return inactive_user
 
-        # ✅ Normal new signup
+        # Normal new signup
         user = super().create(validated_data)
-        self.send_activation_email(user)
         self.context["reactivation"] = False
         return user
-
-    def send_activation_email(self, user):
-       
-        token = default_token_generator.make_token(user)
-        uid = encode_uid(user.pk)
-        CustomActivationEmail(
-            self.context.get("request"),
-            {"user": user, "uid": uid, "token": token}
-        ).send([user.email])
 
     def to_representation(self, instance):
         data = RoleBasedUserDisplaySerializer(instance, context=self.context).data
@@ -272,8 +241,11 @@ class CustomUserCreatePasswordRetypeSerializer(UserCreatePasswordRetypeSerialize
 
         if data["reactivation"]:
             data["message"] = "Account already exists but not activated. Activation email re-sent."
+        else:
+            data["message"] = "Account created successfully. Please check your email to activate your account."
 
         return data
+
 
 
 class CustomPasswordResetSerializer(serializers.Serializer):

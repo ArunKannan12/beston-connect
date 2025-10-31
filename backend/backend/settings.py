@@ -280,7 +280,7 @@ else:
 
 DJOSER = {
     'LOGIN_FIELD': 'email',
-    "EMAIL_FRONTEND_SITE_NAME": 'auth',
+    "EMAIL_FRONTEND_SITE_NAME": 'BESTON ELECTRICALS, ELECTRONICS, MOBILES',
     'ACTIVATION_URL': 'activate/{uid}/{token}',
     'SEND_CONFIRMATION_EMAIL': True,
     "EMAIL": {
@@ -298,7 +298,7 @@ DJOSER = {
     'USER_ID_FIELD': 'email',
     'PASSWORD_RESET_URL': '/password/reset/',
     'SERIALIZERS': {
-        'user_create': 'accounts.serializers.CustomUserCreateSerializer',
+        #  'user_create': 'accounts.serializers.CustomUserCreateSerializer',
         'user_create_password_retype': 'accounts.serializers.CustomUserCreatePasswordRetypeSerializer',  # For creation
         'user_login': 'accounts.serializers.UserLoginSerializer',
         'password_reset': 'accounts.serializers.CustomPasswordResetSerializer',

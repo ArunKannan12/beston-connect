@@ -165,69 +165,87 @@ const LoginAndSignup = () => {
     password: signupData.password,
     re_password: signupData.re_password,
   };
-  const handleSignupSubmit = async (e) => {
+
+
+const handleSignupSubmit = async (e) => {
   e.preventDefault();
   const errors = validateSignup();
   if (Object.keys(errors).length > 0) {
-    console.log("❌ Validation errors:", errors);
     setSignupErrors(errors);
     return;
   }
 
   try {
     setLoading(true);
-    console.log("🚀 Sending signup payload:", payload);
-    const res = await axiosInstance.post("auth/users/", payload);
+    console.log("🟢 Sending signup payload:", payload);
 
-    console.log("✅ Signup response:", res);
+    const res = await axiosInstance.post("auth/users/", payload);
+    console.log("✅ Signup Response:", res);
+
+    const { needs_activation, email, message } = res.data || {};
+    console.log("📦 Extracted Data:", { needs_activation, email, message });
+
+    // Always store API message in state
+    setSignupErrors((prev) => ({ ...prev, api: message || "" }));
 
     if (res.status === 201) {
-      const { needs_activation, email } = res.data;
-      console.log("📩 Parsed response:", res.data);
+      console.log("🎉 Signup success response with status 201");
+
+      // ✅ Use backend message directly in toast
+      if (message) toast.success(message);
 
       if (needs_activation) {
-        toast.info("Your account has been created but isn't activated yet. Please check your email.");
         const from = location.state?.from || "/";
-        console.log("🔄 Redirecting to verify-email:", { email, from });
-        navigate("/verify-email", { state: { email, from } });
+        // Slight delay so toast is visible before navigation (optional)
+        setTimeout(() => {
+          navigate("/verify-email", { state: { email, from } });
+        }, 1000);
       } else {
-        toast.success("Registration successful!");
-        console.log("🎉 New user registered successfully!");
         navigate("/");
       }
     } else {
-      console.log("⚠️ Unexpected status code:", res.status);
+      console.warn("⚠️ Unexpected response status:", res.status);
+      toast.warn("Unexpected response from server.");
     }
 
   } catch (err) {
-    console.log("❗Signup error caught:", err);
+    console.error("❌ Signup error caught:", err);
 
     if (err.response?.data) {
-      console.log("⚠️ Error response from backend:", err.response.data);
+      const data = err.response.data;
+      console.log("🔴 Backend error data:", data);
 
-      if (err.response.data?.needs_activation) {
-        toast.info("Your account exists but isn't activated. Please check your email.");
-        console.log("🔄 Redirecting to verify-email (inactive account):", signupData.email);
-        navigate("/verify-email", { state: { email: signupData.email } });
+      // ✅ Show backend message if exists
+      if (data.message) {
+        toast.error(data.message);
+        setSignupErrors((prev) => ({ ...prev, api: data.message }));
+      }
+
+      if (data?.needs_activation) {
+        // Some backends may still send this
+        setTimeout(() => {
+          navigate("/verify-email", { state: { email: payload.email } });
+        }, 1000);
         return;
       }
 
+      // Field-level validation errors
       const apiErrors = {};
-      for (const key in err.response.data) {
-        apiErrors[key] = Array.isArray(err.response.data[key])
-          ? err.response.data[key][0]
-          : err.response.data[key];
+      for (const key in data) {
+        if (!["message", "needs_activation"].includes(key)) {
+          apiErrors[key] = Array.isArray(data[key]) ? data[key][0] : data[key];
+        }
       }
-      console.log("🧩 Parsed API errors:", apiErrors);
-      setSignupErrors(apiErrors);
+      console.log("🧾 Parsed field errors:", apiErrors);
+      setSignupErrors((prev) => ({ ...prev, ...apiErrors }));
+
     } else {
-      console.log("💥 Network or unknown error:", err);
+      console.error("🚨 Unknown signup error (no response data)");
+      toast.error("Registration failed. Please try again later.");
       setSignupErrors({ api: "Registration failed. Please try again later." });
     }
-
   } finally {
     setLoading(false);
-    console.log("🕒 Signup process finished (loading stopped).");
   }
 };
 
@@ -443,6 +461,11 @@ const LoginAndSignup = () => {
                     <p className="text-sm text-red-500 mt-1">{signupErrors.re_password}</p>
                   )}
                 </div>
+                  {signupErrors.api && (
+                    <p className="text-center text-sm text-blue-600 mt-2">
+                      {signupErrors.api}
+                    </p>
+                  )}
 
                 <button
                   type="submit"
