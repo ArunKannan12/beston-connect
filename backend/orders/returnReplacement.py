@@ -11,77 +11,108 @@ from decimal import Decimal
 from .models import ReturnRequest, ReplacementRequest, Order, OrderStatus, OrderItem
 from .returnReplacementSerializer import ReturnRequestSerializer, ReplacementRequestSerializer
 from accounts.permissions import IsCustomer, IsAdmin, IsAdminOrCustomer
-from .utils import process_refund, check_refund_status
+from .utils import process_refund, check_refund_status,create_reverse_pickup
+
+from rest_framework.generics import CreateAPIView, UpdateAPIView, ListAPIView, RetrieveAPIView
+from rest_framework.response import Response
+from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework import status
+from rest_framework.views import APIView
+from django.utils import timezone
+from django.shortcuts import get_object_or_404
+
+from rest_framework import status
+from rest_framework.generics import CreateAPIView, UpdateAPIView, ListAPIView, RetrieveAPIView
+from rest_framework.response import Response
+from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.permissions import IsAuthenticated
+from django.utils import timezone
+from django.shortcuts import get_object_or_404
 
 
-# ---------------- RETURN REQUEST ----------------
-
+# -------------------- CREATE RETURN REQUEST --------------------
 class ReturnRequestCreateAPIView(CreateAPIView):
     serializer_class = ReturnRequestSerializer
     permission_classes = [IsCustomer]
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user, status="pending")
+        """
+        Customer creates a return request.
+        Automatically sets status to 'pending' and initiates Delhivery reverse pickup.
+        """
+        return_request = serializer.save(user=self.request.user, status="pending")
+
+        try:
+            # Trigger Delhivery reverse pickup API
+            pickup_data = create_reverse_pickup(return_request)
+
+            if pickup_data.get("success"):
+                return_request.waybill = pickup_data.get("waybill")
+                return_request.pickup_date = timezone.now()
+                return_request.status = "pickup_scheduled"
+                return_request.save(update_fields=["waybill", "pickup_date", "status"])
+            else:
+                return_request.status = "pickup_failed"
+                return_request.save(update_fields=["status"])
+        except Exception as e:
+            print(f"Delhivery pickup failed: {e}")
+            return_request.status = "pickup_failed"
+            return_request.save(update_fields=["status"])
 
 
+# -------------------- UPDATE RETURN REQUEST (ADMIN ONLY) --------------------
 class ReturnRequestUpdateAPIView(UpdateAPIView):
     queryset = ReturnRequest.objects.all()
     serializer_class = ReturnRequestSerializer
-    lookup_field = 'id'
-    lookup_url_kwarg = 'returnId'
+    lookup_field = "id"
+    lookup_url_kwarg = "returnId"
 
     def get_permissions(self):
-        role = getattr(self.request.user, 'role', None)
-        if role == 'admin':
+        role = getattr(self.request.user, "role", None)
+        if role == "admin":
             return [IsAdmin()]
-        elif role == 'customer':
+        elif role == "customer":
             return [IsCustomer()]
         return super().get_permissions()
 
     def perform_update(self, serializer):
         instance = serializer.instance
         user = self.request.user
-        role = getattr(user, 'role', None)
+        role = getattr(user, "role", None)
 
-        # ---------------- CUSTOMER ----------------
-        if role == 'customer':
+        # Customers cannot modify return requests once created
+        if role == "customer":
             raise PermissionDenied("Customers cannot update return requests once created.")
 
-        # ---------------- ADMIN ----------------
-        elif role == 'admin':
-            admin_decision = self.request.data.get('admin_decision')
-            if not admin_decision:
-                raise ValidationError({"admin_decision": "This field is required."})
-            admin_comment = self.request.data.get('admin_comment', instance.admin_comment)
-            refund_amount = self.request.data.get('refund_amount', instance.refund_amount)
+        # -------------------- ADMIN --------------------
+        elif role == "admin":
+            status_choice = self.request.data.get("status")
 
-            instance.admin_decision = admin_decision
-            instance.admin_comment = admin_comment
-            instance.refund_amount = refund_amount
+            if status_choice not in ["approved", "rejected"]:
+                raise ValidationError({"status": "Must be 'approved' or 'rejected'."})
+
             instance.admin_processed_at = timezone.now()
 
-            if admin_decision.lower() == "approved" and refund_amount and refund_amount > 0:
-                # Trigger refund via payment gateway
-                refund_id = process_refund(instance)
-                order = instance.order
-                order.refund_id = refund_id or f"RET-{instance.id}"
-                order.refund_status = "pending"
-                order.is_refunded = False
-                order.refund_finalized = False
-                order.refunded_at = None
-                order.save(update_fields=["is_refunded", "refund_id", "refund_status", "refund_finalized", "refunded_at"])
-                instance.status = "approved"
-            
+            # 🟢 APPROVED: trigger Razorpay refund
+            if status_choice == "approved":
+                try:
+                    refund_id = process_refund(instance)
+                    # Refund success or in-progress handled by helper
+                    instance.admin_comment = f"Refund initiated with Razorpay ID {refund_id}"
+                    instance.save(update_fields=["status", "admin_processed_at", "admin_comment"])
+                except Exception as e:
+                    raise ValidationError({"refund": f"Refund failed: {str(e)}"})
+
+            # 🔴 REJECTED
             else:
                 instance.status = "rejected"
-
-            instance.save(update_fields=["admin_decision", "admin_comment", "refund_amount", "admin_processed_at", "status"])
-            return
+                instance.save(update_fields=["status", "admin_processed_at"])
 
         else:
             raise PermissionDenied("You do not have permission to update this return request.")
 
 
+# -------------------- LIST RETURN REQUESTS --------------------
 class ReturnRequestListAPIView(ListAPIView):
     serializer_class = ReturnRequestSerializer
 
@@ -92,11 +123,12 @@ class ReturnRequestListAPIView(ListAPIView):
 
         if role == "customer":
             return qs.filter(user=user)
-        elif role in ["admin", None] or user.is_staff:
+        elif role == "admin" or user.is_staff:
             return qs
         return ReturnRequest.objects.none()
 
 
+# -------------------- RETURN REQUEST DETAIL --------------------
 class ReturnRequestDetailAPIView(RetrieveAPIView):
     serializer_class = ReturnRequestSerializer
     lookup_field = "id"
@@ -106,25 +138,25 @@ class ReturnRequestDetailAPIView(RetrieveAPIView):
         user = self.request.user
         role = getattr(user, "role", None)
         qs = ReturnRequest.objects.all()
+
         if role == "customer":
             return qs.filter(user=user)
-        elif role in ["admin", None] or user.is_staff:
+        elif role == "admin" or user.is_staff:
             return qs
         return ReturnRequest.objects.none()
 
 
+# -------------------- REFUND STATUS CHECK --------------------
 class RefundStatusAPIView(APIView):
     permission_classes = [IsAdminOrCustomer]
 
     def get(self, request, order_number):
         order = get_object_or_404(Order, order_number=order_number)
-        self.check_object_permissions(request, order)
-
         result = check_refund_status(order_number)
+
         if not result.get("success"):
             return Response(result, status=status.HTTP_400_BAD_REQUEST)
         return Response(result, status=status.HTTP_200_OK)
-
 
 # ---------------- REPLACEMENT REQUEST ----------------
 

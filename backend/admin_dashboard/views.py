@@ -1,6 +1,6 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated,AllowAny
 from rest_framework.generics import CreateAPIView, RetrieveUpdateDestroyAPIView
 from rest_framework import status
 from django.db import transaction
@@ -15,7 +15,7 @@ from .serializers import (
                         AdminOrderSerializer,
                         AdminLogSerializer
                         )
-from django.db import transaction
+from orders.signals import send_multichannel_notification
 from django.db.models import Q
 from products.models import Product,ProductVariant
 import json
@@ -32,9 +32,6 @@ from orders.models import Order,ReturnRequest,ReplacementRequest
 from .helpers import str_to_bool
 from .pagination import FlexiblePageSizePagination
 from .models import AdminLog
-import hmac
-import hashlib
-from django.conf import settings
 User=get_user_model()
 
 class AdminDashboardStatsAPIView(APIView):
@@ -841,66 +838,72 @@ class BannerUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
     parser_classes = (MultiPartParser, FormParser)
 
 
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from django.utils import timezone
-from orders.models import Order
-from orders.signals import send_multichannel_notification
 
 class DelhiveryWebhookAPIView(APIView):
     """
-    Receives real-time shipment status updates from Delhivery.
+    Receives real-time shipment status updates from Delhivery (Scan Push).
     Handles both single and multiple shipment payloads.
     """
 
+    permission_classes = [AllowAny]
     authentication_classes = []
-    permission_classes = []
 
     def post(self, request):
-        data = request.data
-
         try:
-            # Delhivery sometimes sends 'Shipments' (list) or single 'Shipment'
-            shipments = data.get("Shipments") or [data.get("Shipment", {})]
+            data = request.data
+            logger.info(f"📦 Delhivery Webhook Received: {data}")
 
+            # Delhivery sends either 'Shipments' or single 'Shipment'
+            shipments = data.get("Shipments") or [data.get("Shipment")] if data.get("Shipment") else []
             processed = []
 
+            if not shipments:
+                return Response({"error": "No shipment data found"}, status=400)
+
             for shipment in shipments:
-                waybill = shipment.get("AWB")
-                status_text = (shipment.get("Status") or "").strip().lower()
-                updated_at = shipment.get("StatusDateTime")
+                if not shipment:
+                    continue
 
-                if not waybill:
-                    continue  # skip invalid entries
+                waybill = shipment.get("AWB") or shipment.get("waybill")
+                status_obj = shipment.get("Status") or {}
+                status_text = (status_obj.get("Status") or "").strip().lower()
+                updated_at = status_obj.get("StatusDateTime") or timezone.now()
 
-                # Map Delhivery status → internal order status
+                if not waybill or not status_text:
+                    continue
+
+                # ✅ Map Delhivery status → internal order status
                 status_map = {
                     "manifested": "processing",
+                    "picked up": "picked",
                     "in transit": "in_transit",
                     "out for delivery": "out_for_delivery",
                     "delivered": "delivered",
-                    "rto": "returned",
+                    "rto initiated": "return_initiated",
+                    "rto delivered": "returned",
                     "cancelled": "cancelled",
                     "undelivered": "undelivered",
                 }
 
                 order_status = status_map.get(status_text)
                 if not order_status:
-                    continue  # ignore unknown statuses
+                    logger.warning(f"⚠️ Unknown status '{status_text}' for {waybill}")
+                    continue
 
+                # ✅ Find order by waybill
                 try:
                     order = Order.objects.get(waybill=waybill)
                 except Order.DoesNotExist:
-                    continue  # no matching order, skip silently
+                    logger.warning(f"🚫 No order found for waybill {waybill}")
+                    continue
 
-                # Update order status
+                # ✅ Update order
                 order.status = order_status
                 if order_status == "delivered":
                     order.delivered_at = timezone.now()
                 order.save(update_fields=["status", "delivered_at"])
 
-                # Notify user automatically
+                # ✅ Send notification
                 send_multichannel_notification(
                     user=order.user,
                     order=order,
@@ -910,7 +913,7 @@ class DelhiveryWebhookAPIView(APIView):
                     payload={
                         "waybill": waybill,
                         "courier": "Delhivery",
-                        "status_updated_at": updated_at,
+                        "status_updated_at": str(updated_at),
                     },
                 )
 
@@ -923,6 +926,7 @@ class DelhiveryWebhookAPIView(APIView):
             return Response({"success": True, "processed": processed}, status=200)
 
         except Exception as e:
+            logger.exception("❌ Error processing Delhivery webhook")
             return Response({"error": str(e)}, status=500)
 
 

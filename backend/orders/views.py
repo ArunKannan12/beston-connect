@@ -27,7 +27,7 @@ from django.utils import timezone
 from cart.models import CartItem
 from rest_framework.views import APIView
 from rest_framework.exceptions import ValidationError
-from .models import Order,ShippingAddress,OrderStatus,OrderItemStatus,Refund
+from .models import Order,ShippingAddress,OrderItemStatus,Refund,OrderItem
 from django.db import transaction
 import razorpay
 from django.conf import settings
@@ -35,7 +35,8 @@ from django.shortcuts import get_object_or_404
 import logging
 from .utils import (process_refund,get_delivery_charge,
                     cancel_delhivery_shipment,
-                    track_delhivery_shipment
+                    track_delhivery_shipment,
+                    get_expected_tat
                     )
 
 from .helpers import( process_checkout,
@@ -477,9 +478,6 @@ class OrderPreviewAPIView(APIView):
             variant=ProductVariant.objects.get(id=item['product_variant_id'])
             total_weight_kg += item['quantity'] * variant.weight
         total_weight_g=total_weight_kg * 1000
-
-        print(total_weight_g)
-        print(total_weight_kg)
         # 4️⃣ Get delivery charge from Delhivery
         delivery_info = get_delivery_charge(
             o_pin="643212",                # your warehouse PIN
@@ -487,13 +485,17 @@ class OrderPreviewAPIView(APIView):
             weight_grams=total_weight_g,
             payment_type="Pre-paid"
         )
-
+        tat_info = get_expected_tat(
+            origin_pin="643212",
+            destination_pin=data["postal_code"],
+            mot='E',       # Express
+            pdt='B2C'      # Business to customer
+        )
         # 5️⃣ Add delivery info to result safely
         result["delivery_charge"] = delivery_info.get("charge", 0)
-        # Use .get() with default to avoid KeyError
-        result["estimated_delivery_days"] = delivery_info.get("estimated_days", None)
+        result["estimated_delivery_days"] = tat_info.get("tat_days")
         result["total"] = float(result["subtotal"]) + result["delivery_charge"]
-        
+
         # 6️⃣ Return response
         return Response(OrderPreviewOutputSerializer(result).data, status=status.HTTP_200_OK)
 
@@ -580,20 +582,25 @@ class OrderTrackingAPIView(APIView):
             status=status.HTTP_200_OK,
         )
 
-class GenerateDelhiveryLabelAPIView(APIView):
+class GenerateDelhiveryLabelsAPIView(APIView):
     permission_classes = [IsAdmin]
 
     def get(self, request, order_number):
         """
-        Generate Delhivery packing slip (PDF label) and return temporary S3 link.
+        Generate Delhivery packing slips (PDF labels) for all items in an order.
         """
         try:
             order = Order.objects.get(order_number=order_number)
         except Order.DoesNotExist:
             return Response({"success": False, "message": "Order not found"}, status=404)
 
-        if not order.waybill:
-            return Response({"success": False, "message": "Waybill not found for this order"}, status=400)
+        # get all items that already have a waybill
+        items = order.items.filter(waybill__isnull=False)
+        if not items.exists():
+            return Response({"success": False, "message": "No waybills found for this order"}, status=400)
+
+        # combine all waybills into a single comma-separated string
+        waybills = ",".join(items.values_list("waybill", flat=True))
 
         url = "https://track.delhivery.com/api/p/packing_slip"
         headers = {
@@ -601,13 +608,13 @@ class GenerateDelhiveryLabelAPIView(APIView):
             "Accept": "application/json",
         }
         params = {
-            "wbns": order.waybill,
+            "wbns": waybills,
             "pdf": "true",
             "pdf_size": "A4",
         }
 
         try:
-            response = requests.get(url, headers=headers, params=params, timeout=15)
+            response = requests.get(url, headers=headers, params=params, timeout=20)
             response.raise_for_status()
             data = response.json()
         except requests.Timeout:
@@ -619,23 +626,34 @@ class GenerateDelhiveryLabelAPIView(APIView):
         if not packages:
             return Response({"success": False, "message": "No packages found in response"}, status=400)
 
-        pdf_link = packages[0].get("pdf_download_link")
-        if not pdf_link:
-            return Response({"success": False, "message": "PDF link not found in response"}, status=400)
+        updated_items = []
+        for package in packages:
+            waybill = package.get("waybill")
+            pdf_link = package.get("pdf_download_link")
+            if not (waybill and pdf_link):
+                continue
 
-        # ✅ Save label URL and timestamp
-        order.label_url = pdf_link
-        order.label_generated_at = timezone.now()
-        order.save(update_fields=["label_url", "label_generated_at"])
+            item = items.filter(waybill=waybill).first()
+            if item:
+                item.label_url = pdf_link
+                item.label_generated_at = timezone.now()
+                item.save(update_fields=["label_url", "label_generated_at"])
+                updated_items.append({
+                    "item_id": item.id,
+                    "waybill": waybill,
+                    "label_url": pdf_link,
+                })
 
-        # ✅ Create warehouse log
-        create_warehouse_log(order, updated_by=request.user, comment="Delhivery label generated")
+        create_warehouse_log(
+            order,
+            updated_by=request.user,
+            comment=f"Generated Delhivery labels for {len(updated_items)} item(s)"
+        )
 
         return Response({
             "success": True,
-            "message": "Delhivery label generated successfully.",
+            "message": f"Delhivery labels generated for {len(updated_items)} item(s)",
             "order_number": order.order_number,
-            "waybill": order.waybill,
-            "label_url": pdf_link,
+            "labels": updated_items,
         })
 

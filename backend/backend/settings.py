@@ -416,8 +416,10 @@ DELHIVERY_API_URL = os.environ.get("DELHIVERY_API_URL", "https://staging-express
 DELHIVERY_PICKUP = {
     "name": env("DELHIVERY_PICKUP_NAME", default="Default Warehouse"),
     "city": env("DELHIVERY_PICKUP_CITY", default="Coimbatore"),
+    "state": env("DELHIVERY_PICKUP_STATE", default="Tamil Nadu"),
     "pin": env("DELHIVERY_PICKUP_PIN", default="641002"),
     "country": env("DELHIVERY_PICKUP_COUNTRY", default="India"),
     "phone": env("DELHIVERY_PICKUP_PHONE", default="9999999999"),
     "add": env("DELHIVERY_PICKUP_ADDRESS", default="Warehouse Address Line"),
 }
+

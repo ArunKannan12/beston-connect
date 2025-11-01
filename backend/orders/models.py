@@ -144,6 +144,10 @@ class OrderItem(models.Model):
     handoff_timestamp = models.DateTimeField(null=True, blank=True)
     shipped_at = models.DateTimeField(null=True, blank=True)
 
+    # In OrderItem model
+    label_url = models.URLField(max_length=500, null=True, blank=True)
+    label_generated_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -178,48 +182,46 @@ class Refund(models.Model):
     def __str__(self):
         return f"{self.refund_id or 'Pending'} - ₹{self.amount}"
 
+from django.db import models
+from django.utils import timezone
+from django.core.exceptions import ValidationError
 
 class ReturnRequest(models.Model):
     STATUS_CHOICES = [
-        ('pending', 'Pending'),
-        ('approved', 'Approved'),
-        ('rejected', 'Rejected'),
-        ('refunded', 'Refunded'),
-    ]
-
-    REFUND_METHOD_CHOICES = [
-        ('razorpay', 'Razorpay'),
-        ('upi', 'UPI'),
-        ('wallet', 'Wallet'),
-        ('manual', 'Manual'),
+        ('pending', 'Pending'),                    # User requested return
+        ('pickup_scheduled', 'Pickup Scheduled'),  # Sent to Delhivery
+        ('in_transit', 'In Transit'),              # Delhivery picked up
+        ('delivered_to_warehouse', 'Delivered to Warehouse'),  # Return received
+        ('refunded', 'Refunded'),                  # Refund issued via Razorpay
+        ('cancelled', 'Cancelled'),                # Cancelled by user/admin
+        ('rejected', 'Rejected'),                  # Invalid/denied return
     ]
 
     # Links
-    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='return_requests')
-    order_item = models.ForeignKey(OrderItem, on_delete=models.CASCADE, null=True, blank=True, related_name='return_requests')
+    order = models.ForeignKey("orders.Order", on_delete=models.CASCADE, related_name='return_requests')
+    order_item = models.ForeignKey("orders.OrderItem", on_delete=models.CASCADE, null=True, blank=True, related_name='return_requests')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='return_requests')
 
-    # Request details
+    # Return details
     reason = models.TextField()
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default='pending')
 
-    # Refund
+    # Refund info
     refund_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    refund_method = models.CharField(max_length=20, choices=REFUND_METHOD_CHOICES, default='razorpay')
-    user_upi = models.CharField(max_length=100, blank=True, default='')
+    refunded_at = models.DateTimeField(null=True, blank=True)
 
-    # Admin decision
-    admin_decision = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    # Delhivery tracking
+    waybill = models.CharField(max_length=50, blank=True, null=True)
+    pickup_date = models.DateTimeField(null=True, blank=True)
+    delivered_back_date = models.DateTimeField(null=True, blank=True)
+
+    # Admin notes
     admin_comment = models.TextField(blank=True, null=True)
     admin_processed_at = models.DateTimeField(null=True, blank=True)
-
-    # Variant policy snapshot (optional)
-    variant_policy_snapshot = models.JSONField(null=True, blank=True)
 
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    refunded_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [
@@ -229,13 +231,7 @@ class ReturnRequest(models.Model):
                 name='unique_active_return_per_item'
             )
         ]
-
-    def mark_refunded(self, amount=None):
-        if amount:
-            self.refund_amount = amount
-        self.status = 'refunded'
-        self.refunded_at = timezone.now()
-        self.save(update_fields=['status', 'refunded_at', 'refund_amount'])
+        ordering = ['-created_at']
 
     def clean(self):
         if self.order_item:
@@ -245,26 +241,21 @@ class ReturnRequest(models.Model):
             if exists:
                 raise ValidationError("A return is already in progress for this item.")
 
-        active_replacement = ReplacementRequest.objects.filter(
-            order_item=self.order_item
-        ).exclude(status__in=["delivered", "failed", "rejected"]).exists()
-        if active_replacement:
-            raise ValidationError("A replacement request already exists for this item.")
-
         if self.refund_amount and self.refund_amount > self.order_item.total_price():
             raise ValidationError({"refund_amount": "Cannot exceed item total."})
 
-        if self.refund_method in ['upi', 'manual', 'wallet']:
-            if self.order.payment_method == 'Cash on Delivery' and not self.user_upi:
-                raise ValidationError({"user_upi": "UPI ID is required for COD/manual refunds."})
-        else:
-            self.user_upi = ""
-
         super().clean()
+
+    def mark_refunded(self, amount=None):
+        if amount:
+            self.refund_amount = amount
+        self.status = 'refunded'
+        self.refunded_at = timezone.now()
+        self.save(update_fields=['status', 'refunded_at', 'refund_amount'])
 
     def __str__(self):
         return f"Return for Item #{self.order_item.id} in Order #{self.order.order_number}" if self.order_item else f"Return for Order #{self.order.order_number}"
-    
+
 class ReplacementRequest(models.Model):
     STATUS_CHOICES = [
         ("pending", "Pending"),

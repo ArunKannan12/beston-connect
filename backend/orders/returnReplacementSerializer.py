@@ -12,15 +12,6 @@ class ReturnRequestSerializer(serializers.ModelSerializer):
     variant = serializers.SerializerMethodField(read_only=True)
     variant_images = serializers.SerializerMethodField(read_only=True)
     product_image = serializers.SerializerMethodField(read_only=True)
-
-    refund_amount = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
-    refund_method = serializers.ChoiceField(choices=ReturnRequest.REFUND_METHOD_CHOICES, required=False)
-    user_upi = serializers.CharField(required=False)
-    refund_status = serializers.SerializerMethodField(read_only=True)
-    refund_id = serializers.SerializerMethodField(read_only=True)
-
-    variant_policy_snapshot = serializers.JSONField(read_only=True)
-
     order_number = serializers.CharField(write_only=True)
     order_item_id = serializers.PrimaryKeyRelatedField(queryset=OrderItem.objects.all(), write_only=True)
 
@@ -28,15 +19,16 @@ class ReturnRequestSerializer(serializers.ModelSerializer):
         model = ReturnRequest
         fields = [
             "id", "order", "order_item", "order_number", "order_item_id",
-            "reason", "status", "refund_amount", "refund_method", "user_upi",
-            "refund_status", "refund_id", "variant_policy_snapshot",
-            "created_at", "updated_at",
+            "reason", "status", "refund_amount",
+            "waybill", "pickup_date", "delivered_back_date",
+            "admin_comment", "created_at", "updated_at", "refunded_at",
             "product", "variant", "variant_images", "product_image", "shipping_address"
         ]
         read_only_fields = [
-            "order", "order_item", "refund_amount", "refund_status", "refund_id",
-            "variant_policy_snapshot", "product", "variant", "variant_images",
-            "product_image", "shipping_address"
+            "order", "order_item", "refund_amount", "waybill",
+            "pickup_date", "delivered_back_date", "admin_comment",
+            "created_at", "updated_at", "refunded_at",
+            "product", "variant", "variant_images", "product_image", "shipping_address"
         ]
 
     def validate(self, attrs):
@@ -61,8 +53,8 @@ class ReturnRequestSerializer(serializers.ModelSerializer):
 
             if order.status.lower() != "delivered":
                 raise serializers.ValidationError("Return requests can only be created for delivered orders.")
-
-            if not order_item.product_variant.allow_return:
+            variant = order_item.product_variant
+            if not variant.allow_return:
                 raise serializers.ValidationError("This product is not eligible for return.")
 
             attrs["order"] = order
@@ -77,13 +69,7 @@ class ReturnRequestSerializer(serializers.ModelSerializer):
         validated_data.pop("order_item_id", None)
 
         refund_amount = order_item.price * order_item.quantity
-        variant = order_item.product_variant
-
-        validated_data["variant_policy_snapshot"] = {
-            "allow_return": variant.allow_return,
-            "return_days": variant.return_days,
-        }
-
+        
         return ReturnRequest.objects.create(
             order=order,
             order_item=order_item,
@@ -92,7 +78,9 @@ class ReturnRequestSerializer(serializers.ModelSerializer):
         )
 
     def get_shipping_address(self, obj):
-        return ShippingAddressSerializer(obj.order.shipping_address).data if obj.order.shipping_address else None
+        if obj.order and hasattr(obj.order, "shipping_address"):
+            return ShippingAddressSerializer(obj.order.shipping_address).data
+        return None
 
     def get_product(self, obj):
         return getattr(obj.order_item.product_variant.product, "name", None)
@@ -108,13 +96,7 @@ class ReturnRequestSerializer(serializers.ModelSerializer):
     def get_product_image(self, obj):
         product = getattr(obj.order_item.product_variant, "product", None)
         return getattr(product, "image_url", None) or getattr(product, "image", None)
-
-    def get_refund_status(self, obj):
-        return getattr(obj.order, "refund_status", None)
-
-    def get_refund_id(self, obj):
-        return getattr(obj.order, "refund_id", None)
-
+    
 class ReplacementRequestSerializer(serializers.ModelSerializer):
     order = OrderLightSerializer(read_only=True)
     order_item = OrderItemLightSerializer(read_only=True)

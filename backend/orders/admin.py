@@ -1,7 +1,7 @@
 
 # delivery/admin.py
 from django.contrib import admin
-from .models import Order, OrderItem, ShippingAddress,Refund
+from .models import Order, OrderItem, ShippingAddress,Refund,ReturnRequest
 
 # -------------------- INLINE --------------------
 class OrderItemInline(admin.TabularInline):
@@ -94,17 +94,24 @@ class RefundAdmin(admin.ModelAdmin):
     search_fields = ("refund_id", "order__order_number", "order__user__email")
     readonly_fields = ("created_at", "processed_at")
     ordering = ("-created_at",)
-# -------------------- RETURN REQUEST --------------------
-# @admin.register(ReturnRequest)
-# class ReturnRequestAdmin(admin.ModelAdmin):
-#     list_display = (
-#         "id", "order", "order_item", "user", "status", "refund_amount", "refund_method", "user_upi",
-#         "pickup_status", "warehouse_decision", "admin_decision", "created_at", "updated_at"
-#     )
-#     list_filter = ("status", "refund_method", "pickup_status", "warehouse_decision", "admin_decision", "created_at")
-#     search_fields = ("order__id", "order_item__product_variant__variant_name", "user__email", "user_upi")
-#     readonly_fields = ("created_at", "updated_at", "refunded_at")
-#     ordering = ("-created_at",)
+
+@admin.register(ReturnRequest)
+class ReturnRequestAdmin(admin.ModelAdmin):
+    list_display = (
+        "id", "order", "order_item", "user",
+        "status", "refund_amount", "waybill",
+        "pickup_date", "delivered_back_date",
+        "refunded_at", "created_at"
+    )
+    list_filter = ("status", "created_at", "refunded_at")
+    search_fields = (
+        "order__order_number",
+        "order_item__product_variant__variant_name",
+        "user__email",
+        "waybill"
+    )
+    readonly_fields = ("created_at", "updated_at", "refunded_at")
+    ordering = ("-created_at",)
 
 # # -------------------- REPLACEMENT REQUEST --------------------
 # @admin.register(ReplacementRequest)

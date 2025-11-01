@@ -197,6 +197,8 @@ const Checkout = () => {
       try {
         const res = await axiosInstance.post("checkout/preview/", payload);
         setOrderPreview(res.data);
+        console.log(res.data,'checkout preview');
+        
       } catch (error) {
         console.error("[Checkout] Preview failed", error.response?.data || error.message);
         toast.error(error.response?.data?.detail || "Failed to fetch order preview");
@@ -350,6 +352,7 @@ const Checkout = () => {
               subtotal={orderPreview.subtotal}
               deliveryCharge={orderPreview.delivery_charge}
               totalAmount={orderPreview.total}
+              estimatedDeliveryDays={orderPreview.estimated_delivery_days} // ✅ pass it down
               onPlaceOrder={handlePlaceOrder}
             />
           ) : (
@@ -359,7 +362,6 @@ const Checkout = () => {
                 : "Please select an address to see your order summary."}
             </div>
           )}
-
         </>
       )}
     </div>

@@ -14,7 +14,7 @@ from .views import (
     CancelOrderAPIView,
     RazorpayOrderCreateAPIView,
     RazorpayPaymentVerifyAPIView,
-    GenerateDelhiveryLabelAPIView,
+    GenerateDelhiveryLabelsAPIView,
   
     # Shipping address flows
     ShippingAddressListCreateView,
@@ -76,6 +76,7 @@ urlpatterns = [
     path("replacements/<int:pk>/update/", ReplacementRequestUpdateAPIView.as_view(), name="replacement-update"),
     path("replacements/", ReplacementRequestListAPIView.as_view(), name="replacement-list"),
     path("replacements/<int:pk>/", ReplacementRequestDetailAPIView.as_view(), name="replacement-detail"),
-    path("admin/orders/<str:order_number>/generate-label/", GenerateDelhiveryLabelAPIView.as_view(), name="generate-label"),
+    path("orders/<str:order_number>/generate-labels/", GenerateDelhiveryLabelsAPIView.as_view(), name="generate-item-label"),
+
 
 ]
