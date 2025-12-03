@@ -5,7 +5,7 @@ echo "Installing dependencies..."
 pip install -r requirements.txt
 
 echo "Setting Django settings module..."
-export DJANGO_SETTINGS_MODULE=backend.backend.settings
+export DJANGO_SETTINGS_MODULE=backend.settings
 
 echo "Collecting static files..."
 python manage.py collectstatic --noinput

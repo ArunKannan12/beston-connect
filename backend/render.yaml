@@ -9,10 +9,9 @@ services:
       chmod +x build.sh
       ./build.sh
 
-    startCommand: gunicorn backend.backend.wsgi:application --timeout 120
+    startCommand: gunicorn backend.wsgi:application --timeout 120
 
     postDeployCommand: |
-      export DJANGO_SETTINGS_MODULE=backend.backend.settings
       python manage.py migrate
 
     envVars:
