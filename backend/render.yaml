@@ -11,11 +11,12 @@ services:
 
     startCommand: gunicorn backend.wsgi:application --timeout 120
 
-    postDeployCommand: |
-      python manage.py migrate
+    postDeployCommand: python manage.py migrate --noinput
 
     envVars:
       - fromDotEnv: true
+      - key: DJANGO_SETTINGS_MODULE
+        value: backend.settings
 
 databases:
   - name: ecommerce_db
