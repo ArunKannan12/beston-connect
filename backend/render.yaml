@@ -3,18 +3,18 @@ services:
     name: ecommerce
     env: python
     plan: free
+
     buildCommand: |
       pip install --upgrade pip
-      pip install -r requirements.txt
-      export DJANGO_SETTINGS_MODULE=backend.settings
-      cd backend
-      python manage.py collectstatic --noinput
+      chmod +x build.sh
+      ./build.sh
 
-    startCommand: gunicorn backend.wsgi:application --timeout 120
+    startCommand: gunicorn backend.backend.wsgi:application --timeout 120
+
     postDeployCommand: |
-      export DJANGO_SETTINGS_MODULE=backend.settings
-      cd backend
-      python manage.py migrate
+      export DJANGO_SETTINGS_MODULE=backend.backend.settings
+      python backend/manage.py migrate
+
     envVars:
       - fromDotEnv: true
 
