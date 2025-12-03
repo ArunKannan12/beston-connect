@@ -3,19 +3,16 @@ services:
     name: ecommerce
     env: python
     buildCommand: "./build.sh"
-    startCommand: "gunicorn backend.wsgi:application"
-    postDeployCommand: "python manage.py migrate"
+    startCommand: "gunicorn backend.wsgi:application --timeout 120"
+    postDeployCommand: "python backend/manage.py migrate --noinput"
+    plan: free
     envVars:
       - fromDotEnv: true
-    plan: free
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ecommerce_db
+          property: connectionString
 
 databases:
   - name: ecommerce_db
     plan: free
-
-envVars:
-  - fromDotEnv: true
-  - key: DATABASE_URL
-    fromDatabase:
-      name: ecommerce_db
-      property: connectionString
