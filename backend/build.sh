@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
+# Exit on error
 set -o errexit
 
 echo "Installing dependencies..."
 pip install -r requirements.txt
 
-echo "Setting Django settings module..."
-export DJANGO_SETTINGS_MODULE=backend.settings
-
 echo "Collecting static files..."
-python backend/manage.py collectstatic --noinput
+python manage.py collectstatic --noinput
 
 echo "Fixing migration order issue..."
-python backend/fix_migrations.py
+python fix_migrations.py   # <-- fakes missing dependencies & applies remaining migrations
 
 echo "Build completed successfully ✅"
