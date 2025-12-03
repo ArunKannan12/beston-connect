@@ -4,7 +4,7 @@ set -o errexit
 
 echo "Installing dependencies..."
 pip install -r requirements.txt
-
+export DJANGO_SETTINGS_MODULE=backend.settings
 echo "Collecting static files..."
 python manage.py collectstatic --noinput
 
