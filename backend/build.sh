@@ -8,9 +8,11 @@ echo "Setting Django settings module..."
 export DJANGO_SETTINGS_MODULE=backend.settings
 
 echo "Collecting static files..."
+cd backend
 python manage.py collectstatic --noinput
+cd ..
 
 echo "Fixing migration order issue..."
-python fix_migrations.py
+python backend/fix_migrations.py
 
 echo "Build completed successfully ✅"
