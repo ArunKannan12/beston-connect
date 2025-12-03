@@ -13,7 +13,7 @@ services:
 
     postDeployCommand: |
       export DJANGO_SETTINGS_MODULE=backend.backend.settings
-      python backend/manage.py migrate
+      python manage.py migrate
 
     envVars:
       - fromDotEnv: true
