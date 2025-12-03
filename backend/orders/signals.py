@@ -3,7 +3,15 @@ from django.dispatch import receiver
 from django.db import transaction
 from .models import Order, OrderItem, Notification
 
-def send_multichannel_notification(user,order=None,order_item=None,event=None,message=None,channels=["email"],payload=None,):
+def send_multichannel_notification(user,
+                                   order=None,
+                                   order_item=None,
+                                   event=None,
+                                   message=None,
+                                   channels=["email"],
+                                   payload=None,
+                                   template_name="emails/notification.html", 
+                                   ):
     """
     Create notifications for multiple channels (email, SMS, WhatsApp, push, etc.)
     """
@@ -24,13 +32,13 @@ def send_multichannel_notification(user,order=None,order_item=None,event=None,me
             )
 
             if created:
-                notif.send_notification()
+                notif.send_notification(template_name=template_name)
             else:
                 # Optional: Update payload/message if already exists
                 notif.payload = payload
                 notif.message = message
                 notif.save(update_fields=["payload", "message"])
-                notif.send_notification()
+                notif.send_notification(template_name=template_name)
 
 # -------------------------
 # ORDER NOTIFICATIONS
@@ -132,7 +140,7 @@ def handle_order_notifications(sender, instance, created, **kwargs):
 
     # 💰 REFUND INITIATED
     elif (
-        instance.is_refunded
+        instance.has_refund
         and not Notification.objects.filter(order=instance, event="order_refunded").exists()
     ):
         send_multichannel_notification(

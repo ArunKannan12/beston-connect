@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import axiosInstance from "../../api/axiosinstance.jsx";
-import {useNavigate} from 'react-router-dom'
+import {useLocation, useNavigate} from 'react-router-dom'
+import { useAuth } from "../../contexts/authContext.jsx";
+import { toast } from "react-toastify";
 
 const BecomePromoterPage = () => {
   const [selectedPlan, setSelectedPlan] = useState("");
@@ -16,7 +18,35 @@ const BecomePromoterPage = () => {
   const [settings, setSettings] = useState(null);
   const [timeLeft, setTimeLeft] = useState("");
   const navigate = useNavigate();
+  const { user, fetchProfile} = useAuth();
 
+  const isBlocked =
+    user?.role === "admin" || user?.roles?.includes("promoter");
+
+  // ❗ Show message if user is already a promoter or admin
+  useEffect(() => {
+    if (!user) return;
+
+    if (user.roles?.includes("promoter")) {
+      toast.info("You are already a promoter.");
+    }
+
+    if (user.role === "admin") {
+      toast.info("Admin accounts cannot become promoters.");
+    }
+  }, [user]);
+
+
+  const location=useLocation();
+
+
+  useEffect(()=>{
+    const params = new URLSearchParams(location.search)
+    const ref = params.get('ref')
+    if (ref){
+      localStorage.setItem('referral_code',ref)
+    }
+  },[location])
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -79,16 +109,21 @@ const BecomePromoterPage = () => {
     setLoading(true);
     setMessage({ type: "", text: "" });
 
+    const referral_code =localStorage.getItem('referral_code')
+    const payload = {...formData}
+    if (referral_code) payload.referral_code = referral_code
+
     try {
       if (selectedPlan === "unpaid") {
-        const res = await axiosInstance.post("/promoters/", formData);
+        const res = await axiosInstance.post("/promoters/", payload);
        
         setMessage({
           type: "success",
           text: "You are now registered as a Free Promoter!",
         });
-
-        navigate("/promoter/dashboard/unpaid");
+        localStorage.removeItem('referral_code')
+        await fetchProfile()
+        navigate("/promoter/dashboard", { state: { promoterType: "unpaid" } });
       } else {
          const { data } = await axiosInstance.post("/promoter/become-premium/", formData);
        
@@ -111,8 +146,9 @@ const BecomePromoterPage = () => {
                 type: "success",
                 text: "Premium Promoter registration successful!",
               });
-
-              navigate("/promoter/dashboard/paid");
+              localStorage.removeItem('referral_code')
+              await fetchProfile()
+              navigate("/promoter/dashboard", { state: { promoterType: "paid" } });
             } catch (verifyError) {
                setMessage({
                 type: "error",
@@ -131,9 +167,8 @@ const BecomePromoterPage = () => {
         rzp.open();
       }
     } catch (err) {
-      
+      console.log(err);
       let errorMessage = "Something went wrong.";
-
       if (err.response?.data) {
         const data = err.response.data;
          if (data.detail) {
@@ -156,6 +191,19 @@ const BecomePromoterPage = () => {
       setLoading(false);
     }
   };
+
+  if (isBlocked) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center">
+        <h2 className="text-3xl font-bold text-gray-800">Access Restricted</h2>
+        <p className="mt-3 text-gray-600">
+          {user.role === "admin"
+            ? "Admins cannot become promoters."
+            : "You are already a promoter."}
+        </p>
+      </div>
+    );
+  }
 
 
 
@@ -219,10 +267,11 @@ const BecomePromoterPage = () => {
             <div className="flex flex-col justify-center items-center my-8 relative">
               {settings ? (
                 <>
-                  <span className="mr-2 text-5xl font-extrabold">₹{settings.amount}</span>
-                  {settings.offer_active && settings.offer_amount && (
-                    <span className="text-gray-500 line-through text-xl">₹{settings.offer_amount}</span>
+                  {settings.offer_active && (
+                    <span className="text-gray-500 line-through text-xl mr-2">₹{settings.original_amount}</span>
                   )}
+                  <span className="text-5xl font-extrabold">₹{settings.amount}</span>
+                  
                   {settings.offer_active && settings.offer_end && (
                     <p className="mt-4 inline-block px-5 py-2 rounded-full bg-red-600 text-white font-bold text-lg animate-pulse shadow-lg">
                       Offer ends in: {timeLeft}
@@ -232,6 +281,7 @@ const BecomePromoterPage = () => {
               ) : (
                 <span className="text-2xl font-semibold">Loading...</span>
               )}
+
             </div>
 
             <ul role="list" className="mb-8 space-y-4 text-left text-gray-700">

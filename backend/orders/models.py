@@ -1,5 +1,5 @@
 from rest_framework.exceptions import ValidationError
-from django.utils import timezone 
+from django.utils import timezone
 from django.db import models
 from django.contrib.auth import get_user_model
 from products.models import ProductVariant
@@ -8,6 +8,9 @@ from django.core.validators import RegexValidator
 from promoter.models import Promoter
 import random
 from .notificationModel import *
+import uuid
+from datetime import timedelta
+
 
 User = get_user_model()
 
@@ -34,13 +37,20 @@ class ShippingAddress(models.Model):
     def __str__(self):
         return f"{self.full_name} ({self.locality}, {self.city}, {self.state})"
 
+
 # ---------------- Order Status ----------------
 class OrderStatus(models.TextChoices):
     PENDING = 'pending', 'Pending'
     PROCESSING = 'processing', 'Processing'
-    SHIPPED = 'shipped', 'Shipped'
+    PICKED = 'picked', 'Picked'
+    IN_TRANSIT = 'in_transit', 'In Transit'
+    OUT_FOR_DELIVERY = 'out_for_delivery', 'Out for Delivery'
     DELIVERED = 'delivered', 'Delivered'
+    RETURN_INITIATED = 'return_initiated', 'Return Initiated'
+    DELIVERED_TO_WAREHOUSE = 'delivered_to_warehouse', 'Delivered to Warehouse'
     CANCELLED = 'cancelled', 'Cancelled'
+    UNDELIVERED = 'undelivered', 'Undelivered'
+
 
 
 # ---------------- Payment Method ----------------
@@ -63,7 +73,7 @@ class Order(models.Model):
     shipping_address = models.ForeignKey(ShippingAddress, on_delete=models.CASCADE)
 
     # --- Status & Payment ---
-    status = models.CharField(max_length=30, choices=OrderStatus.choices, default=OrderStatus.PENDING)
+    status = models.CharField(max_length=50, choices=OrderStatus.choices, default=OrderStatus.PENDING)
     payment_method = models.CharField(max_length=50, choices=PaymentMethod.choices, default=PaymentMethod.RAZORPAY)
     is_paid = models.BooleanField(default=False)
     paid_at = models.DateTimeField(null=True, blank=True)
@@ -76,7 +86,7 @@ class Order(models.Model):
     total_commission = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
     total = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
     promoter = models.ForeignKey("promoter.Promoter", on_delete=models.SET_NULL, null=True, blank=True)
-
+    is_commission_applied=models.BooleanField(default=False)
     # --- Cancellation ---
     cancel_reason = models.TextField(null=True, blank=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
@@ -85,10 +95,21 @@ class Order(models.Model):
     is_restocked = models.BooleanField(default=False)
 
     # --- Refund summary ---
-    has_refund = models.BooleanField(default=False)  # ✅ New summary flag (auto updated via signal)
+    has_refund = models.BooleanField(default=False)  # auto-updated via signal
+
+    # --- Shipping / Courier ---
+    courier = models.CharField(max_length=50, blank=True, null=True)
+    waybill = models.CharField(max_length=50, blank=True, null=True)
+    tracking_url = models.URLField(blank=True, null=True)
+    label_url = models.URLField(max_length=500, null=True, blank=True)
+    label_generated_at = models.DateTimeField(null=True, blank=True)
+    shipped_at = models.DateTimeField(null=True, blank=True)
+    handoff_timestamp = models.DateTimeField(null=True, blank=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
 
     # --- Meta ---
     order_number = models.CharField(max_length=20, unique=True, editable=False, null=True, blank=True)
+    checkout_session_id=models.CharField(max_length=100,null=True,blank=True,db_index=True,help_text="Unique identifier to link retries or failed payment sessions")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -101,6 +122,18 @@ class Order(models.Model):
         super().save(*args, **kwargs)
 
     @property
+    def weight_total(self):
+        """
+        Returns total weight of the order in grams.
+        Uses product_variant.get_weight_in_grams() for each item and multiplies by quantity.
+        """
+        total_grams = 0
+        for item in self.items.all():
+            variant_weight_grams = item.product_variant.get_weight_in_grams()
+            total_grams += variant_weight_grams * item.quantity
+        return total_grams or 200  # default to 200g if nothing is found
+
+    @property
     def is_fully_cancelled(self):
         return self.items.exclude(status="cancelled").count() == 0
 
@@ -110,43 +143,45 @@ class Order(models.Model):
         cancelled_items = self.items.filter(status="cancelled").count()
         return 0 < cancelled_items < total_items
 
+    @property
+    def delhivery_tracking_url(self):
+        if self.waybill:
+            return f"https://www.delhivery.com/tracking?waybill={self.waybill}"
+        return None
+
 
 # ---------------- Order Item ----------------
 class OrderItemStatus(models.TextChoices):
     PENDING = 'pending', 'Pending'
-    PROCESSING = 'processing', 'Processing'  # ✅ add this
-    SHIPPED = 'shipped', 'Shipped'
+    PROCESSING = 'processing', 'Processing'
+    PICKED = 'picked', 'Picked'
+    IN_TRANSIT = 'in_transit', 'In Transit'
+    OUT_FOR_DELIVERY = 'out_for_delivery', 'Out for Delivery'
     DELIVERED = 'delivered', 'Delivered'
+    RETURN_INITIATED = 'return_initiated', 'Return Initiated'
+    DELIVERED_TO_WAREHOUSE = 'delivered_to_warehouse', 'Delivered to Warehouse'
     CANCELLED = 'cancelled', 'Cancelled'
+    UNDELIVERED = 'undelivered', 'Undelivered'
     REFUNDED = 'refunded', 'Refunded'
+
 
 
 class OrderItem(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="items")
     product_variant = models.ForeignKey("products.ProductVariant", on_delete=models.CASCADE)
     quantity = models.PositiveIntegerField(default=1)
-    status = models.CharField(max_length=20, choices=OrderItemStatus.choices, default=OrderItemStatus.PENDING)
+    status = models.CharField(max_length=50, choices=OrderItemStatus.choices, default=OrderItemStatus.PENDING)
     price = models.DecimalField(max_digits=10, decimal_places=2)
 
     # --- Promoter Commission ---
     promoter = models.ForeignKey("promoter.Promoter", on_delete=models.SET_NULL, null=True, blank=True)
     promoter_commission_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     promoter_commission_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    referral_code = models.CharField(max_length=50, null=True, blank=True)
 
     # --- Cancellation & Refunds ---
     cancel_reason = models.TextField(blank=True, null=True)
     refund_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-
-    # --- Courier / Shipping ---
-    courier = models.CharField(max_length=50, blank=True, null=True)
-    waybill = models.CharField(max_length=50, blank=True, null=True)
-    tracking_url = models.URLField(blank=True, null=True)
-    handoff_timestamp = models.DateTimeField(null=True, blank=True)
-    shipped_at = models.DateTimeField(null=True, blank=True)
-
-    # In OrderItem model
-    label_url = models.URLField(max_length=500, null=True, blank=True)
-    label_generated_at = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -158,15 +193,12 @@ class OrderItem(models.Model):
     def is_cancelled(self):
         return self.status == OrderItemStatus.CANCELLED
 
+    def total_price(self):
+        return self.price * self.quantity
+
     @property
     def is_active(self):
         return self.status not in [OrderItemStatus.CANCELLED, OrderItemStatus.REFUNDED]
-
-    @property
-    def delhivery_tracking_url(self):
-        if self.waybill:
-            return f"https://www.delhivery.com/tracking?waybill={self.waybill}"
-        return None
 
 
 # ---------------- Refund ----------------
@@ -182,19 +214,16 @@ class Refund(models.Model):
     def __str__(self):
         return f"{self.refund_id or 'Pending'} - ₹{self.amount}"
 
-from django.db import models
-from django.utils import timezone
-from django.core.exceptions import ValidationError
 
 class ReturnRequest(models.Model):
     STATUS_CHOICES = [
-        ('pending', 'Pending'),                    # User requested return
-        ('pickup_scheduled', 'Pickup Scheduled'),  # Sent to Delhivery
-        ('in_transit', 'In Transit'),              # Delhivery picked up
-        ('delivered_to_warehouse', 'Delivered to Warehouse'),  # Return received
-        ('refunded', 'Refunded'),                  # Refund issued via Razorpay
-        ('cancelled', 'Cancelled'),                # Cancelled by user/admin
-        ('rejected', 'Rejected'),                  # Invalid/denied return
+        ('pending', 'Pending'),
+        ('pickup_scheduled', 'Pickup Scheduled'),
+        ('in_transit', 'In Transit'),
+        ('delivered_to_warehouse', 'Delivered to Warehouse'),
+        ('refunded', 'Refunded'),
+        ('cancelled', 'Cancelled'),
+        ('rejected', 'Rejected'),
     ]
 
     # Links
@@ -204,11 +233,13 @@ class ReturnRequest(models.Model):
 
     # Return details
     reason = models.TextField()
-    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default='pending')
+    status = models.CharField(max_length=50, choices=STATUS_CHOICES, default='pending')
 
     # Refund info
     refund_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     refunded_at = models.DateTimeField(null=True, blank=True)
+    reverse_pickup_charge = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    recovery_fixed = models.BooleanField(default=False)
 
     # Delhivery tracking
     waybill = models.CharField(max_length=50, blank=True, null=True)
@@ -241,21 +272,138 @@ class ReturnRequest(models.Model):
             if exists:
                 raise ValidationError("A return is already in progress for this item.")
 
-        if self.refund_amount and self.refund_amount > self.order_item.total_price():
+        if self.refund_amount and self.order_item and self.refund_amount > self.order_item.total_price():
             raise ValidationError({"refund_amount": "Cannot exceed item total."})
 
         super().clean()
 
-    def mark_refunded(self, amount=None):
-        if amount:
+    def mark_refunded(self, amount=None, reverse_charge=None):
+        from .models import ReturnRecoveryAccount, ReturnRecoveryTransaction
+
+        if amount is not None:
             self.refund_amount = amount
+
+        # If reverse_charge not provided → use existing saved charge → fallback
+        if reverse_charge is None:
+            reverse_charge = (
+                self.reverse_pickup_charge or
+                self.refund_amount or
+                Decimal("0.00")
+            )
+
+        # Save charge in model
+        self.reverse_pickup_charge = reverse_charge
+        self.recovery_fixed = True  # ⭐ IMPORTANT: prevent future double recovery
+
         self.status = 'refunded'
         self.refunded_at = timezone.now()
-        self.save(update_fields=['status', 'refunded_at', 'refund_amount'])
+        self.admin_comment = (
+            f"Refunded ₹{self.refund_amount}. "
+            f"Pending recovery ₹{reverse_charge} saved."
+        )
+        self.save(update_fields=[
+            'status',
+            'refunded_at',
+            'refund_amount',
+            'reverse_pickup_charge',
+            'recovery_fixed',
+            'admin_comment'
+        ])
+
+        # ⭐ DO NOT ADD DUPLICATE RECOVERY ENTRY
+        account, _ = ReturnRecoveryAccount.objects.get_or_create(user=self.user)
+
+        already_added = ReturnRecoveryTransaction.objects.filter(
+            account=account,
+            source=f"ReturnRequest #{self.id}",
+            transaction_type="debit"
+        ).exists()
+
+        if not already_added and reverse_charge > 0:
+            account.add_recovery(reverse_charge, source=f"ReturnRequest #{self.id}")
+
+
+    @classmethod
+    def should_block_user(cls, user, threshold=3, window_days=90):
+        recent_returns = cls.objects.filter(
+            user=user,
+            created_at__gte=timezone.now() - timedelta(days=window_days)
+        ).count()
+        return recent_returns > threshold
+
+    @classmethod
+    def is_user_blocked(cls, user):
+        # Optional: integrate with a separate user-block table instead of ReturnRequest
+        return cls.objects.filter(user=user, status='refunded', created_at__gte=timezone.now() - timedelta(days=30)).count() > 3
 
     def __str__(self):
         return f"Return for Item #{self.order_item.id} in Order #{self.order.order_number}" if self.order_item else f"Return for Order #{self.order.order_number}"
 
+class ReturnRecoveryAccount(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="recovery_account")
+    total_recovery = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    total_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    balance_due = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    last_updated = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user.get_full_name()} - Pending ₹{self.balance_due}"
+
+    # Add a new recovery (debit) when a return is refunded
+    def add_recovery(self, amount, source):
+        amount = Decimal(amount)
+        if amount <= 0:
+            return
+        self.total_recovery += amount
+        self.balance_due += amount
+        self.save(update_fields=["total_recovery", "balance_due", "last_updated"])
+        ReturnRecoveryTransaction.objects.create(
+            account=self,
+            transaction_type="debit",
+            amount=amount,
+            source=source,
+            description=f"Return charge added from {source}"
+        )
+
+    # Apply recovery payment (credit) from checkout or manual adjustment
+    def apply_payment(self, amount, source="Checkout Adjustment"):
+        amount = Decimal(amount)
+        applied = min(self.balance_due, amount)
+        if applied <= 0:
+            return Decimal("0.00")
+        self.total_paid += applied
+        self.balance_due -= applied
+        self.save(update_fields=["total_paid", "balance_due", "last_updated"])
+        ReturnRecoveryTransaction.objects.create(
+            account=self,
+            transaction_type="credit",
+            amount=applied,
+            source=source,
+            description=f"Recovered ₹{applied} from {source}"
+        )
+        return applied
+
+
+class ReturnRecoveryTransaction(models.Model):
+    TRANSACTION_CHOICES = [
+        ('debit', 'Debit (Recovery Added)'),
+        ('credit', 'Credit (Recovered)')
+    ]
+
+    account = models.ForeignKey(ReturnRecoveryAccount, on_delete=models.CASCADE, related_name='transactions')
+    transaction_type = models.CharField(max_length=10, choices=TRANSACTION_CHOICES)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    source = models.CharField(max_length=100, blank=True, null=True)
+    description = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.account.user.get_full_name()} - {self.transaction_type.upper()} ₹{self.amount} ({self.source})"
+
+    
 class ReplacementRequest(models.Model):
     STATUS_CHOICES = [
         ("pending", "Pending"),
@@ -326,3 +474,5 @@ class ReplacementRequest(models.Model):
 
     def __str__(self):
         return f"Replacement for Item #{self.order_item.id} in Order #{self.order.order_number}" if self.order_item else f"Replacement for Order #{self.order.order_number}"
+    
+

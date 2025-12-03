@@ -3,69 +3,111 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.generics import ListCreateAPIView, RetrieveUpdateDestroyAPIView
 from rest_framework.exceptions import ValidationError
-from rest_framework import status
-from django.shortcuts import get_object_or_404
+from rest_framework import status,serializers
 from django.db import transaction
 from rest_framework.throttling import UserRateThrottle
 
-from .serializers import CartItemSerializer, CartSummarySerializer,CartItemInputSerializer
+from .serializers import (
+    CartItemSerializer,
+    CartSummarySerializer,
+    CartItemInputSerializer,
+)
 from .models import CartItem, Cart
 from accounts.permissions import IsCustomer
 from products.models import ProductVariant
-from products.serializers import ProductVariantSerializer
 from .utils import check_stock
+from decimal import Decimal
 
+
+# =====================================================
+# CART ITEM LIST + CREATE
+# =====================================================
 class CartItemListCreateApiView(ListCreateAPIView):
-    serializer_class = CartItemSerializer
     permission_classes = [IsCustomer]
 
     def get_queryset(self):
         return CartItem.objects.filter(cart__user=self.request.user)
 
+    def get_serializer_class(self):
+        if self.request.method == "POST":
+            return CartItemInputSerializer  # WRITE SERIALIZER 
+        return CartItemSerializer          # READ SERIALIZER
+
     @transaction.atomic
     def perform_create(self, serializer):
+        """
+        serializer = CartItemInputSerializer → validated_data contains:
+        { product_variant_id, quantity, referral_code }
+        """
         cart, _ = Cart.objects.get_or_create(user=self.request.user)
-        product_variant = serializer.validated_data.get('product_variant')
-        quantity = serializer.validated_data.get('quantity')
-        existing_item = CartItem.objects.filter(cart=cart, product_variant=product_variant).first()
+
+        variant_id = serializer.validated_data["product_variant_id"]
+        quantity = serializer.validated_data["quantity"]
+        ref_code = serializer.validated_data.get("referral_code")
+
+        product_variant = ProductVariant.objects.get(id=variant_id)
+
+        # Check if item already exists
+        existing_item = CartItem.objects.filter(
+            cart=cart, product_variant=product_variant
+        ).first()
 
         if existing_item:
             new_quantity = existing_item.quantity + quantity
             check_stock(product_variant, new_quantity)
             existing_item.quantity = new_quantity
+            if ref_code is not None:
+                existing_item.referral_code = ref_code
             existing_item.save()
         else:
             check_stock(product_variant, quantity)
-            serializer.save(cart=cart)
+            CartItem.objects.create(
+                cart=cart,
+                product_variant=product_variant,
+                quantity=quantity,
+                referral_code=ref_code,
+            )
 
 
+# =====================================================
+# CART ITEM RETRIEVE + UPDATE + DELETE
+# =====================================================
 class CartItemRetrieveUpdateDestroyAPIView(RetrieveUpdateDestroyAPIView):
-    serializer_class = CartItemSerializer
+    lookup_field = "id"
     permission_classes = [IsCustomer]
-    lookup_field = 'id'
 
     def get_queryset(self):
         return CartItem.objects.filter(cart__user=self.request.user)
+
+    def get_serializer_class(self):
+        if self.request.method in ["PUT", "PATCH"]:
+            return CartItemInputSerializer  # WRITE
+        return CartItemSerializer          # READ
+
     @transaction.atomic
-
     def perform_update(self, serializer):
-        item = serializer.instance
-
+        item = self.get_object()
         if item.cart.user != self.request.user:
-            raise ValidationError("You can't update items in someone else's cart.")
+            raise ValidationError("Not allowed.")
 
-        new_quantity = serializer.validated_data.get('quantity')
-        if new_quantity > item.product_variant.stock:
-            raise ValidationError("Not enough stock available.")
-        check_stock(item.product_variant, new_quantity)
-        serializer.save(quantity=new_quantity)
+        quantity = serializer.validated_data["quantity"]
+        check_stock(item.product_variant, quantity)
+
+        item.quantity = quantity
+        ref_code = serializer.validated_data.get("referral_code")
+        if ref_code is not None:
+            item.referral_code = ref_code
+        item.save()
 
     def perform_destroy(self, instance):
         if instance.cart.user != self.request.user:
-            raise ValidationError("You can't remove items from someone else's cart.")
+            raise ValidationError("Not allowed.")
         instance.delete()
 
 
+# =====================================================
+# CART SUMMARY
+# =====================================================
 class CartSummaryAPIView(APIView):
     permission_classes = [IsAuthenticated, IsCustomer]
 
@@ -79,9 +121,8 @@ class CartSummaryAPIView(APIView):
                 "total_price": 0,
             })
 
-        serializer = CartSummarySerializer(cart, context={'request': request})
+        serializer = CartSummarySerializer(cart, context={"request": request})
         return Response(serializer.data)
-
 
 class CartMergeAPIView(APIView):
     permission_classes = [IsAuthenticated, IsCustomer]
@@ -89,138 +130,128 @@ class CartMergeAPIView(APIView):
 
     @transaction.atomic
     def post(self, request):
-        print(f"[CartMerge] User: {request.user}")
-
         items = request.data.get("items", [])
-        if not isinstance(items, list):
-            print(f"[CartMerge] Invalid payload: Expected a list, got {type(items).__name__}")
-            return Response({"error": "Expected a list of items"}, status=status.HTTP_400_BAD_REQUEST)
+        if not isinstance(items, list) or not items:
+            return Response({"detail": "Expected a non-empty list of items"}, status=status.HTTP_400_BAD_REQUEST)
 
         cart, _ = Cart.objects.get_or_create(user=request.user)
-        print(f"[CartMerge] Cart ID: {cart.id}")
 
-        merged_items = []
-        skipped_items = []
-        failed_items = []
+        merged_items, skipped_items, failed_items = [], [], []
 
-        # Prefetch variants for performance
-        variant_ids = [i.get("product_variant_id") for i in items if isinstance(i, dict)]
+        # Pre-fetch variants to reduce DB queries
+        variant_ids = [i.get("product_variant_id") for i in items]
         variants_map = {v.id: v for v in ProductVariant.objects.filter(id__in=variant_ids)}
 
-        for idx, item in enumerate(items):
-            print(f"[CartMerge] Processing item {idx + 1}: {item}")
-
+        for item in items:
             serializer = CartItemInputSerializer(data=item)
             if not serializer.is_valid():
-                print(f"[CartMerge] Skipped: Invalid item data - {serializer.errors}")
-                skipped_items.append({
-                    "item": item,
-                    "errors": serializer.errors
-                })
+                skipped_items.append({"item": item, "errors": serializer.errors})
                 continue
 
-            validated_data = serializer.validated_data
-            variant_id = validated_data['product_variant_id']
-            quantity = validated_data['quantity']
-            source = item.get("source", "add_to_cart")  # Optional source tag
+            data = serializer.validated_data
+            variant_id = data["product_variant_id"]
+            quantity = data["quantity"]
+            ref_code = data.get("referral_code")
 
             variant = variants_map.get(variant_id)
             if not variant:
-                print(f"[CartMerge] Failed: Variant {variant_id} not found")
-                failed_items.append({
-                    "variant_id": variant_id,
-                    "error": "Variant not found",
-                    "item": item
-                })
+                failed_items.append({"item": item, "error": "Variant not found"})
                 continue
 
             try:
+                # Check stock
+                check_stock(variant, quantity)
+
+                # Merge into cart
                 cart_item, created = CartItem.objects.get_or_create(
                     cart=cart,
                     product_variant=variant,
-                    defaults={'quantity': quantity}
+                    defaults={"quantity": quantity, "referral_code": ref_code},
                 )
-                if created:
-                    print(f"[CartMerge] Created new cart item")
-                    check_stock(variant, quantity)
-                else:
-                    new_quantity = cart_item.quantity + quantity
-                    print(f"[CartMerge] Updated cart item: {cart_item.quantity} → {new_quantity}")
-                    check_stock(variant, new_quantity)
-                    cart_item.quantity = new_quantity
+
+                if not created:
+                    new_qty = cart_item.quantity + quantity
+                    check_stock(variant, new_qty)
+                    cart_item.quantity = new_qty
+                    if ref_code is not None:
+                        cart_item.referral_code = ref_code
                     cart_item.save()
 
                 merged_items.append({
                     "variant_id": variant_id,
                     "quantity": cart_item.quantity,
                     "created": created,
-                    "source": source
                 })
 
+            except serializers.ValidationError as e:
+                failed_items.append({"item": item, "error": e.detail})
             except Exception as e:
-                print(f"[CartMerge] Failed to merge item {variant_id}: {str(e)}")
-                failed_items.append({
-                    "variant_id": variant_id,
-                    "error": str(e),
-                    "item": item
-                })
-
-        print(f"[CartMerge] Merge complete. Merged: {len(merged_items)}, Skipped: {len(skipped_items)}, Failed: {len(failed_items)}")
+                failed_items.append({"item": item, "error": str(e)})
 
         return Response({
             "detail": "Cart merged successfully",
-            "cart": CartSummarySerializer(cart, context={'request': request}).data,
+            "cart": CartSummarySerializer(cart).data,
             "merged_items": merged_items,
             "skipped_items": skipped_items,
-            "failed_items": failed_items
-        })
+            "failed_items": failed_items,
+        }, status=status.HTTP_200_OK)
 
 
+# =====================================================
+# PRODUCT VARIANT BULK FETCH
+# =====================================================
 class ProductVariantBulkAPIView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        variant_ids = request.data.get('variant_ids', [])
+        variant_ids = request.data.get("variant_ids", [])
         if not isinstance(variant_ids, list):
             return Response({"error": "variant_ids must be a list"}, status=400)
 
-        variants = ProductVariant.objects.filter(id__in=variant_ids).prefetch_related('images')
-        serializer = ProductVariantSerializer(variants, many=True, context={'request': request})
+        variants = ProductVariant.objects.filter(id__in=variant_ids).prefetch_related(
+            "images"
+        )
+        from products.serializers import ProductVariantSerializer
+
+        serializer = ProductVariantSerializer(variants, many=True)
         return Response(serializer.data)
 
 
-from decimal import Decimal
-
+# =====================================================
+# GUEST CART DETAILS
+# =====================================================
 class GuestCartDetailsAPIView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
         guest_cart = request.data.get("cart", [])
-        if not isinstance(guest_cart, list) or not guest_cart:
-            return Response({"items": [], "total_quantity": 0, "total_price": "0.00"}, status=200)
+        if not guest_cart:
+            return Response({"items": [], "total_quantity": 0, "total_price": "0.00"})
 
-        variant_ids = [item.get("product_variant_id") for item in guest_cart if item.get("product_variant_id")]
-        variants = ProductVariant.objects.filter(id__in=variant_ids).select_related('product').prefetch_related('images')
+        variant_ids = [i["product_variant_id"] for i in guest_cart]
+        variants = ProductVariant.objects.filter(id__in=variant_ids).prefetch_related(
+            "images"
+        )
 
-        serialized_variants = ProductVariantSerializer(variants, many=True, context={'request': request}).data
-        variant_map = {v["id"]: v for v in serialized_variants}
+        from products.serializers import ProductVariantSerializer
+        serialized = ProductVariantSerializer(variants, many=True).data
+        variant_map = {v["id"]: v for v in serialized}
 
-        items = []
-        total_quantity = 0
-        total_price = Decimal("0.00")
+        items, total_qty, total_price = [], 0, Decimal("0.00")
 
-        for cart_item in guest_cart:
-            variant_id = cart_item.get("product_variant_id")
-            quantity = int(cart_item.get("quantity", 1))
-            variant_data = variant_map.get(variant_id)
-            if variant_data:
-                price = Decimal(str(variant_data.get("final_price", "0.00")))
-                items.append({**variant_data, "quantity": quantity, "price": str(price)})
-                total_quantity += quantity
-                total_price += price * quantity
+        for item in guest_cart:
+            vid = item["product_variant_id"]
+            qty = int(item.get("quantity", 1))
+            v = variant_map.get(vid)
+
+            if v:
+                price = Decimal(str(v["final_price"]))
+                items.append({**v, "quantity": qty, "price": str(price)})
+                total_qty += qty
+                total_price += price * qty
 
         return Response({
             "items": items,
-            "total_quantity": total_quantity,
+            "total_quantity": total_qty,
             "total_price": str(total_price)
-        }, status=200)
+        })

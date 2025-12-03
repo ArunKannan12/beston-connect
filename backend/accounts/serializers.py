@@ -39,13 +39,13 @@ class BaseUserSerializer(serializers.ModelSerializer):
     roles = serializers.SerializerMethodField()
     current_role = serializers.SerializerMethodField()  # override to show active_role
     role=serializers.SerializerMethodField()
-
+    auth_provider = serializers.CharField(read_only=True)
     class Meta:
         model = User
         fields = [
             'id', 'email', 'first_name', 'last_name','role',
             'is_active', 'is_verified', 'roles', 'current_role', 'active_role',
-            'created_at', 'custom_user_profile'
+            'created_at', 'custom_user_profile','auth_provider'
         ]
         read_only_fields = ['id', 'email', 'active_role', 'role', 'created_at', 'custom_user_profile']
     def get_role(self, obj):
@@ -122,7 +122,6 @@ class CustomUserCreateSerializer(BaseUserCreateSerializer):
 
         return data
 
-
 class CustomerProfileSerializer(BaseUserSerializer):
     phone_number = serializers.CharField(
         required=False, allow_blank=True, validators=[phone_regex]
@@ -131,7 +130,7 @@ class CustomerProfileSerializer(BaseUserSerializer):
         required=False, allow_blank=True, validators=[pincode_regex]
     )
     district = serializers.CharField(
-    required=False, allow_blank=True, validators=[name_regex]
+        required=False, allow_blank=True, validators=[name_regex]
     )
     city = serializers.CharField(
         required=False, allow_blank=True, validators=[name_regex]
@@ -139,11 +138,23 @@ class CustomerProfileSerializer(BaseUserSerializer):
     state = serializers.CharField(
         required=False, allow_blank=True, validators=[name_regex]
     )
+
     class Meta(BaseUserSerializer.Meta):
         fields = BaseUserSerializer.Meta.fields + [
-            'phone_number', 'address', 'pincode', 
-            'district', 'city', 'state','social_auth_pro_pic'
+            'phone_number', 'address', 'pincode',
+            'district', 'city', 'state', 'social_auth_pro_pic'
         ]
+
+    def validate_phone_number(self, value):
+        # Skip empty values
+        if not value:
+            return value
+        
+        qs = User.objects.exclude(pk=self.instance.pk if self.instance else None)
+        if qs.filter(phone_number=value).exists():
+            raise serializers.ValidationError("This phone number is already in use.")
+        return value
+
 
 class InvestorProfileSerializer(BaseUserSerializer):
     investor_profile = serializers.SerializerMethodField()
@@ -181,6 +192,7 @@ class RoleBasedUserDisplaySerializer(serializers.Serializer):
                 "first_name": instance.first_name,
                 "last_name": instance.last_name,
                 "active_role": instance.active_role,
+                "auth_provider": instance.auth_provider,
                 "roles": list(instance.user_roles.values_list("role__name", flat=True))
             })
             return data

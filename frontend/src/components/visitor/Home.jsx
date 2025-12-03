@@ -70,13 +70,15 @@ const Home = () => {
         variant.images?.[0]?.image_url ||
         variant.product_category?.image_url ||
         "/placeholder.png";
-
+      console.log(featured);
+      
       return (
         <Link
           key={variant.id}
-          to={`/products/${variant.product_slug}?variant=${variant.id}`}
+          to={`/products/${variant.product_slug}?variant=${encodeURIComponent(variant.variant_name)}`}
           className="group block bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm hover:shadow-md transition duration-300"
         >
+
           {/* Image */}
           <div className="relative w-full aspect-[4/3]">
             <img

@@ -33,9 +33,12 @@ from .returnReplacement import (
     ReplacementRequestDetailAPIView,
     ReplacementRequestListAPIView,
     ReplacementRequestUpdateAPIView,
+    ReturnRequestRefundAPIView
     
    
 )
+from .tasks import apply_commission_cron
+
 
 urlpatterns = [
     # 🛒 Checkout APIs
@@ -69,6 +72,7 @@ urlpatterns = [
     # Details of a single return request
     # urls.py
     path("returns/<int:returnId>/", ReturnRequestDetailAPIView.as_view()),
+    path('returns/<int:return_id>/process_refund/', ReturnRequestRefundAPIView.as_view(), name='return-refund'),
     path("refund-status/<str:order_number>/", RefundStatusAPIView.as_view(), name="refund-status"),
 
     # replacements/ endpoints should use plural like returns/
@@ -79,4 +83,5 @@ urlpatterns = [
     path("orders/<str:order_number>/generate-labels/", GenerateDelhiveryLabelsAPIView.as_view(), name="generate-item-label"),
 
 
+    path("apply-commission-cron/", apply_commission_cron),
 ]

@@ -85,16 +85,19 @@ export default function AdminReturns() {
           className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:ring-blue-500 focus:outline-none"
         />
 
-        <select
+       <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
           className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:ring-blue-500 focus:outline-none"
         >
           <option value="">All Statuses</option>
           <option value="pending">Pending</option>
-          <option value="approved">Approved</option>
-          <option value="rejected">Rejected</option>
+          <option value="pickup_scheduled">Pickup Scheduled</option>
+          <option value="in_transit">In Transit</option>
+          <option value="delivered_to_warehouse">Delivered to Warehouse</option>
           <option value="refunded">Refunded</option>
+          <option value="cancelled">Cancelled</option>
+          <option value="rejected">Rejected</option>
         </select>
 
         <div className="flex gap-2">
@@ -163,7 +166,7 @@ export default function AdminReturns() {
                   onClick={() => openModal(ret)}
                 >
                   <td className="px-4 py-3 border-t">{ret.id}</td>
-                  <td className="px-4 py-3 border-t">{ret.order.id}</td>
+                  <td className="px-4 py-3 border-t">{ret.order.order_number}</td>
                   <td className="px-4 py-3 border-t">{ret.product}</td>
                   <td className="px-4 py-3 border-t">{ret.variant}</td>
                   <td className="px-4 py-3 border-t">

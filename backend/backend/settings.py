@@ -410,16 +410,23 @@ CSRF_TRUSTED_ORIGINS = env.list(
 
 
 
-DELHIVERY_API_TOKEN = os.environ.get("DELHIVERY_API_TOKEN")
+
+if ENVIRONMENT == 'production':
+    DELHIVERY_API_TOKEN = env("DELHIVERY_LIVE_API_TOKEN")
+else:
+    DELHIVERY_API_TOKEN = env("DELHIVERY_TEST_API_TOKEN")
+
 DELHIVERY_API_URL = os.environ.get("DELHIVERY_API_URL", "https://staging-express.delhivery.com/api/kinko/v1/invoice/charges/.json")
-
+DELHIVERY_CLIENT_CODE=os.environ.get("DELHIVERY_CLIENT_CODE")
 DELHIVERY_PICKUP = {
-    "name": env("DELHIVERY_PICKUP_NAME", default="Default Warehouse"),
-    "city": env("DELHIVERY_PICKUP_CITY", default="Coimbatore"),
+    "name": env("DELHIVERY_PICKUP_NAME", default="Beston Connect"),
+    "city": env("DELHIVERY_PICKUP_CITY", default="Gudalur"),
     "state": env("DELHIVERY_PICKUP_STATE", default="Tamil Nadu"),
-    "pin": env("DELHIVERY_PICKUP_PIN", default="641002"),
+    "pin": env("DELHIVERY_PICKUP_PIN", default="643212"),
     "country": env("DELHIVERY_PICKUP_COUNTRY", default="India"),
-    "phone": env("DELHIVERY_PICKUP_PHONE", default="9999999999"),
-    "add": env("DELHIVERY_PICKUP_ADDRESS", default="Warehouse Address Line"),
+    "phone": env("DELHIVERY_PICKUP_PHONE", default="7094291701"),
+    "add": env(
+        "DELHIVERY_PICKUP_ADDRESS",
+        default="2/625, Parankolli, Sreemadurai (PO), Manvayal, Gudalur, The Nilgiris",
+    ),
 }
-

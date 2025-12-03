@@ -22,8 +22,7 @@ class PromoterAdmin(admin.ModelAdmin):
     )
     readonly_fields = (
         'referral_code', 'submitted_at', 
-        'total_sales_count', 'total_commission_earned',
-        'wallet_balance', 'is_eligible_for_withdrawal'
+        'is_eligible_for_withdrawal'
     )
     ordering = ('-submitted_at',)
     list_per_page = 25

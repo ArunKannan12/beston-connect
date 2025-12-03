@@ -83,6 +83,7 @@ const Store = () => {
   const handleCategorySelect = (slug) => {
     navigate(slug ? `/store/${slug}` : "/store");
   };
+console.log(variants,'v');
 
   return (
     <div className="px-4 sm:px-8 lg:px-12 py-6 sm:py-10 min-h-screen">
@@ -187,7 +188,6 @@ const Store = () => {
           >
             {variants.map((variant, i) => {
               const imageUrl = variant.primary_image_url || "/placeholder.png";
-              const price = variant.final_price;
               const productSlug = variant.product_slug;
               const productName = variant.product_name;
               const variantLabel = variant.variant_name;
@@ -202,9 +202,10 @@ const Store = () => {
                   className="bg-white rounded-2xl shadow-lg overflow-hidden flex flex-col hover:shadow-xl transition-all duration-300 group"
                 >
                   <Link
-                    to={`/products/${productSlug}?variant=${variant.id}`}
-                    className="flex flex-col h-full"
-                  >
+                  to={`/products/${productSlug}/?variant=${encodeURIComponent(variant.variant_name)}`}
+                  className="flex flex-col h-full"
+                >
+
                     {/* Image */}
                     <div className="relative w-full aspect-square overflow-hidden">
                       <img
@@ -230,18 +231,21 @@ const Store = () => {
 
                       {/* Price */}
                       <div className="mt-2 flex items-center gap-2 flex-wrap">
-                        {variant.offer_price && variant.offer_price < variant.base_price ? (
+                        {Number(variant.offer_price) < Number(variant.base_price) ? (
                           <>
                             <span className="text-base sm:text-lg font-bold text-gray-900">
-                              ₹{variant.offer_price}
+                              ₹{Number(variant.offer_price).toFixed(2)}
                             </span>
                             <span className="text-sm sm:text-base text-gray-400 line-through">
-                              ₹{variant.base_price}
+                              ₹{Number(variant.base_price).toFixed(2)}
+                            </span>
+                            <span className="text-xs text-red-500 font-semibold">
+                              ({variant.discount_percent}% off)
                             </span>
                           </>
                         ) : (
                           <span className="text-base sm:text-lg font-bold text-gray-900">
-                            ₹{variant.base_price}
+                            ₹{Number(variant.base_price).toFixed(2)}
                           </span>
                         )}
                       </div>
@@ -250,6 +254,7 @@ const Store = () => {
                 </motion.div>
               );
             })}
+
           </motion.div>
         ) : (
           <div className="text-center text-gray-500 mt-20">

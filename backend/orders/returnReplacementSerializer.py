@@ -14,13 +14,13 @@ class ReturnRequestSerializer(serializers.ModelSerializer):
     product_image = serializers.SerializerMethodField(read_only=True)
     order_number = serializers.CharField(write_only=True)
     order_item_id = serializers.PrimaryKeyRelatedField(queryset=OrderItem.objects.all(), write_only=True)
-
+    return_days_remaining = serializers.SerializerMethodField()
     class Meta:
         model = ReturnRequest
         fields = [
             "id", "order", "order_item", "order_number", "order_item_id",
             "reason", "status", "refund_amount",
-            "waybill", "pickup_date", "delivered_back_date",
+            "waybill", "pickup_date", "delivered_back_date",'return_days_remaining',
             "admin_comment", "created_at", "updated_at", "refunded_at",
             "product", "variant", "variant_images", "product_image", "shipping_address"
         ]
@@ -53,14 +53,26 @@ class ReturnRequestSerializer(serializers.ModelSerializer):
 
             if order.status.lower() != "delivered":
                 raise serializers.ValidationError("Return requests can only be created for delivered orders.")
+
             variant = order_item.product_variant
             if not variant.allow_return:
                 raise serializers.ValidationError("This product is not eligible for return.")
+
+            # --- New: Check for duplicate active return ---
+            active_return_exists = ReturnRequest.objects.filter(
+                order_item=order_item
+            ).exclude(status='refunded').exists()
+
+            if active_return_exists:
+                raise serializers.ValidationError(
+                    f"A return request is already in progress for this item (OrderItem ID {order_item.id})."
+                )
 
             attrs["order"] = order
             attrs["order_item"] = order_item
 
         return attrs
+
 
     def create(self, validated_data):
         order = validated_data.pop("order")
@@ -96,7 +108,16 @@ class ReturnRequestSerializer(serializers.ModelSerializer):
     def get_product_image(self, obj):
         product = getattr(obj.order_item.product_variant, "product", None)
         return getattr(product, "image_url", None) or getattr(product, "image", None)
-    
+    def get_return_days_remaining(self, obj):
+        """
+        Returns the number of days left for return based on product's allowed return_days.
+        """
+        if obj.order_item and obj.order_item.product_variant:
+            allowed_days = obj.order_item.product_variant.return_days
+            days_passed = (timezone.now().date() - obj.created_at.date()).days
+            remaining = allowed_days - days_passed
+            return max(0, remaining)
+        return 0
 class ReplacementRequestSerializer(serializers.ModelSerializer):
     order = OrderLightSerializer(read_only=True)
     order_item = OrderItemLightSerializer(read_only=True)

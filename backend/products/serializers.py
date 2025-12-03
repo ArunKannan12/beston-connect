@@ -112,7 +112,7 @@ class ProductVariantSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'variant_name', 'description', 'sku', 'base_price', 'featured',
             'offer_price', 'final_price', 'discount_percent', 'stock',
-            'is_low_stock', 'is_active', 'images', 'primary_image_url',
+            'is_low_stock', 'is_active', 'images', 'primary_image_url', 'weight', 'promoter_commission_rate',
             'product_id', 'product_name', 'product_slug', 'product_category', 'product_created_at', 'is_new',
             'allow_return', 'return_days', 'allow_replacement', 'replacement_days', 'is_returnable', 'is_replaceable',
         ]

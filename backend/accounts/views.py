@@ -681,8 +681,8 @@ class ProfileView(APIView):
         serializer.save()
 
         # Return full role-based profile
-        from .serializers import RoleBasedUserSerializer
-        return Response(RoleBasedUserSerializer(user, context={"request": request}).data, status=status.HTTP_200_OK)
+        from .serializers import RoleBasedUserDisplaySerializer
+        return Response(RoleBasedUserDisplaySerializer(user, context={"request": request}).data, status=status.HTTP_200_OK)
 
 
 from django.http import HttpResponse

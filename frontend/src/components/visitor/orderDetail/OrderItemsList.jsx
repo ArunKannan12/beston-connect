@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { motion } from "framer-motion";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, NavLink } from "react-router-dom";
 import axiosInstance from "../../../api/axiosinstance";
 import { toast } from "react-toastify";
 
@@ -13,39 +13,24 @@ const fadeUp = {
   }),
 };
 
-const OrderItemsList = ({ items, orderNumber, orders, fetchOrder }) => {
+const OrderItemsList = ({ items, orderNumber, fetchOrder,orders }) => {
   const navigate = useNavigate();
   const [selectedItem, setSelectedItem] = useState(null);
-  const [trackingData, setTrackingData] = useState(null);
-  const [loadingTrack, setLoadingTrack] = useState(false);
   const [cancelLoading, setCancelLoading] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
-
-  const handleTrack = async (itemId) => {
-    setLoadingTrack(true);
-    try {
-      const res = await axiosInstance.get(`/orders/${orderNumber}/track/`);
-      const data = res.data.tracking_items.find((t) => t.item_id === itemId);
-      setTrackingData(data);
-      setSelectedItem(itemId);
-    } catch (err) {
-      toast.error("Failed to fetch tracking info");
-    } finally {
-      setLoadingTrack(false);
-    }
-  };
 
   const handleCancel = async (itemId) => {
     if (!cancelReason.trim()) {
       toast.error("Please provide a reason for cancellation.");
       return;
     }
+
     setCancelLoading(true);
     try {
       await axiosInstance.post(`/orders/${orderNumber}/cancel/`, {
         cancel_reason: cancelReason,
-        item_id: itemId, // backend will handle partial cancel if item_id provided
+        item_id: itemId,
       });
       toast.success("Item cancelled successfully");
       fetchOrder();
@@ -59,9 +44,9 @@ const OrderItemsList = ({ items, orderNumber, orders, fetchOrder }) => {
   };
 
   const handleProductClick = (slug) => navigate(`/products/${slug}`);
-
+    
   return (
-    <div className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 mb-10">
+    <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 mb-10">
       <h2 className="text-2xl font-bold mb-6 text-gray-900 text-center">
         🛍️ Order Items
       </h2>
@@ -73,131 +58,129 @@ const OrderItemsList = ({ items, orderNumber, orders, fetchOrder }) => {
           hidden: {},
           visible: { transition: { staggerChildren: 0.05 } },
         }}
-        className="divide-y divide-gray-200"
+        className="flex flex-col gap-4"
       >
         {items.map((item, index) => {
           const variant = item.product_variant;
           const price = parseFloat(item.price || variant.final_price || 0);
           const imageUrl =
-            variant.images?.[0]?.image_url ||
-            variant.primary_image_url ||
-            "/placeholder.png";
+            variant.images?.[0]?.image_url || variant.primary_image_url || "/placeholder.png";
 
+          // Determine eligibility
+          const returnDaysLeft = item.return_remaining_days ?? variant.return_days ?? 0;
+          const replacementDaysLeft =
+            item.replacement_remaining_days ?? variant.replacement_days ?? 0;
+          const returnEligible = variant.allow_return && returnDaysLeft > 0;
+          const replacementEligible = variant.allow_replacement && replacementDaysLeft > 0;
+
+          const itemReturnRequest = item.return_request;
+          const itemReplacementRequest = item.replacement_request;
+         
           return (
             <motion.div
               key={item.id}
               custom={index}
               variants={fadeUp}
-              className="py-4 flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4"
+              className="bg-white shadow-sm rounded-lg p-4 sm:p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 hover:shadow-md transition"
             >
-              {/* Left: Image + Name */}
-              <div className="flex items-center gap-4">
+              {/* Left: Image + Info */}
+              <div className="flex items-start gap-4 w-full sm:w-2/3">
                 <img
                   src={imageUrl}
                   alt={variant.product_name}
-                  className="w-14 h-14 object-cover rounded-md cursor-pointer"
+                  className="w-16 h-16 object-cover rounded-md cursor-pointer"
                   onClick={() => handleProductClick(variant.product_slug)}
                 />
-                <div
-                  className="cursor-pointer"
-                  onClick={() => handleProductClick(variant.product_slug)}
-                >
-                  <p className="font-medium text-gray-900">
+                <div className="flex-1">
+                  <p
+                    className="font-medium text-gray-900 cursor-pointer"
+                    onClick={() => handleProductClick(variant.product_slug)}
+                  >
                     {variant.product_name}
                     {variant.variant_name && (
-                      <span className="text-sm text-gray-600">
-                        {" "}
-                        – {variant.variant_name}
-                      </span>
+                      <span className="text-sm text-gray-500"> – {variant.variant_name}</span>
                     )}
                   </p>
-                  <p className="text-sm text-gray-500">
+                  <p className="text-sm text-gray-500 mt-1">
                     Qty: {item.quantity} | Status:{" "}
-                    <span className="capitalize font-medium">
-                      {item.status}
-                    </span>
+                    <span className="capitalize font-medium">{item.status}</span>
                   </p>
+                  {/* Dynamic Buttons */}
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    {/* Cancel */}
+                    {(item.status === "pending" || item.status === "processing") && (
+                      <button
+                        onClick={() => {
+                          setSelectedItem(item.id);
+                          setShowCancelModal(true);
+                        }}
+                        className="px-3 py-1 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700 transition"
+                      >
+                        ❌ Cancel
+                      </button>
+                    )}
+
+                    {/* Return / Replacement */}
+                    {item.status === "delivered" && (
+                      <>
+                        {/* Return */}
+                        {itemReturnRequest ? (
+                          <NavLink
+                            to={`/returns/${itemReturnRequest.id}`}
+                            className="px-3 py-1 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 transition"
+                          >
+                            View Return
+                          </NavLink>
+                        ) : !itemReplacementRequest && returnEligible ? (
+                          <NavLink
+                            to={`/returns/create/${orderNumber}?item=${item.id}`}
+                            className="px-3 py-1 bg-yellow-500 text-white rounded-lg text-sm hover:bg-yellow-600 transition"
+                          >
+                            Request Return
+                          </NavLink>
+                        ) : null}
+
+                        {/* Replacement */}
+                        {itemReplacementRequest ? (
+                          <NavLink
+                            to={`/replacements/${itemReplacementRequest.id}`}
+                            className="px-3 py-1 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition"
+                          >
+                            View Replacement
+                          </NavLink>
+                        ) : !itemReturnRequest && replacementEligible ? (
+                          <NavLink
+                            to={`/replacements/create/${orderNumber}?item=${item.id}`}
+                            className="px-3 py-1 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 transition"
+                          >
+                            Request Replacement
+                          </NavLink>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+
                 </div>
               </div>
 
-              {/* Right: Actions + Price */}
-              <div className="flex flex-col sm:items-end text-sm text-gray-700 gap-2">
-                <div className="flex gap-3">
-                  {item.status !== "cancelled" && (
-                    <>
-                      <button
-                        onClick={() => handleTrack(item.id)}
-                        className="text-blue-600 hover:text-blue-800 underline"
-                      >
-                        🚚 Track
-                      </button>
-                      {(item.status === "pending" ||
-                        item.status === "processing") && (
-                        <button
-                          onClick={() => {
-                            setSelectedItem(item.id);
-                            setShowCancelModal(true);
-                          }}
-                          className="text-red-600 hover:text-red-800 underline"
-                        >
-                          ❌ Cancel
-                        </button>
-                      )}
-                    </>
-                  )}
-                </div>
-                <div className="font-bold text-gray-900">
+              {/* Right: Price */}
+              <div className="flex flex-col items-end mt-4 sm:mt-0">
+                <span className="font-bold text-lg text-gray-900">
                   ₹{(price * item.quantity).toFixed(2)}
-                  <span className="block text-xs text-gray-500 font-normal">
-                    ₹{price.toFixed(2)} × {item.quantity}
-                  </span>
-                </div>
+                </span>
+                <span className="text-sm text-gray-500">
+                  ₹{price.toFixed(2)} × {item.quantity}
+                </span>
               </div>
             </motion.div>
           );
         })}
       </motion.div>
 
-      {/* Tracking Modal */}
-      {trackingData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-          <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-md relative">
-            <button
-              onClick={() => setTrackingData(null)}
-              className="absolute top-3 right-3 text-gray-500 hover:text-gray-800"
-            >
-              ✖
-            </button>
-            <h3 className="text-lg font-bold mb-2">📦 Tracking Details</h3>
-            <p className="text-sm text-gray-600 mb-3">
-              Waybill: {trackingData.waybill || "Not available"}
-            </p>
-            {loadingTrack ? (
-              <p>Loading tracking info...</p>
-            ) : trackingData.tracking ? (
-              <div className="space-y-2">
-                {trackingData.tracking.map((t, i) => (
-                  <div
-                    key={i}
-                    className="border-l-2 border-blue-500 pl-3 text-sm"
-                  >
-                    <p className="font-medium">{t.status}</p>
-                    <p className="text-gray-500 text-xs">{t.scanned_on}</p>
-                    <p className="text-gray-600">{t.location}</p>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-gray-500">{trackingData.message}</p>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Cancel Modal */}
       {showCancelModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-          <div className="bg-white/80 backdrop-blur-md border border-gray-200 rounded-2xl shadow-xl p-6 max-w-sm w-full">
+          <div className="bg-white/90 border border-gray-200 rounded-2xl shadow-xl p-6 max-w-sm w-full">
             <h3 className="text-lg font-bold text-gray-900 mb-3">
               Confirm Item Cancellation
             </h3>
@@ -219,9 +202,7 @@ const OrderItemsList = ({ items, orderNumber, orders, fetchOrder }) => {
                 onClick={() => handleCancel(selectedItem)}
                 disabled={cancelLoading}
                 className={`px-4 py-2 rounded-lg text-white transition ${
-                  cancelLoading
-                    ? "bg-red-400 cursor-not-allowed"
-                    : "bg-red-600 hover:bg-red-700"
+                  cancelLoading ? "bg-red-400 cursor-not-allowed" : "bg-red-600 hover:bg-red-700"
                 }`}
               >
                 {cancelLoading ? "Cancelling..." : "Yes, Cancel"}

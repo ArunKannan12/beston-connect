@@ -41,9 +41,12 @@ const ProductModal = ({ onClose, onSuccess, product = null }) => {
         allow_replacement: false,
         replacement_days: 0,
         featured:false,
+        weight: "",
+        promoter_commission_rate: "",
         images: [],
         existingImages: [],
       }]);
+
       return;
     }
 
@@ -63,6 +66,8 @@ const ProductModal = ({ onClose, onSuccess, product = null }) => {
         base_price: v.base_price,
         offer_price: v.offer_price,
         stock: v.stock,
+        weight: v.weight ,
+        promoter_commission_rate: v.promoter_commission_rate ,
         is_active: v.is_active ?? true,
         allow_return: v.allow_return ?? false,
         return_days: v.return_days || 0,
@@ -176,6 +181,8 @@ const ProductModal = ({ onClose, onSuccess, product = null }) => {
         base_price: "",
         offer_price: "",
         stock: "",
+        weight:'',
+        promoter_commission_rate:'',
         is_active: true,
         allow_return: false,
         return_days: 0,
@@ -221,6 +228,8 @@ const ProductModal = ({ onClose, onSuccess, product = null }) => {
         base_price: v.base_price,
         offer_price: v.offer_price,
         stock: v.stock,
+        weight: v.weight,
+        promoter_commission_rate: v.promoter_commission_rate,
         is_active: v.is_active,
         allow_return: v.allow_return,
         return_days: v.return_days,
@@ -241,7 +250,7 @@ const ProductModal = ({ onClose, onSuccess, product = null }) => {
           formData.append(`variant_${vIndex}_image_${imgIndex}`, file)
         )
       );
-
+      
       const url = isEdit ? `admin/products/${product.id}/` : "admin/create-products/";
       const method = isEdit ? "patch" : "post";
 
@@ -258,6 +267,7 @@ const ProductModal = ({ onClose, onSuccess, product = null }) => {
     }
   };
 
+  
   // ---------------- Render ----------------
   return (
     <AnimatePresence>

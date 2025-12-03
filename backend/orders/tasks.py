@@ -1,27 +1,33 @@
 import time
 import logging
+from rest_framework import status
+from django.conf import settings
 from django.db import transaction
-from orders.models import Order, OrderItem
+from orders.models import Order, OrderItem,OrderItemStatus
 from orders.utils import track_delhivery_shipment
-
+from promoter.utils import apply_promoter_commission
+from django.http import JsonResponse
+from datetime import date, timedelta
 logger = logging.getLogger(__name__)
 
 def auto_update_tracking():
     """
     Periodically checks Delhivery tracking info and auto-updates
-    order item statuses + parent order status.
+    order + all related order items statuses.
+    Runs every 3 hours.
     """
     while True:
         try:
-            logger.info("🔁 Checking Delhivery shipment statuses (per item)...")
+            logger.info("🔁 Checking Delhivery shipment statuses (per order)...")
 
-            # Get only active order items
-            active_items = OrderItem.objects.filter(
-                status__in=["processing", "shipped"], waybill__isnull=False
-            ).select_related("order")
+            # Get orders that are still active and have a waybill
+            active_orders = Order.objects.filter(
+                status__in=["processing", "shipped"],
+                waybill__isnull=False
+            ).prefetch_related("items")
 
-            for item in active_items:
-                tracking_info = track_delhivery_shipment(waybill=item.waybill)
+            for order in active_orders:
+                tracking_info = track_delhivery_shipment(waybill=order.waybill)
                 if not tracking_info.get("success"):
                     continue
 
@@ -41,34 +47,21 @@ def auto_update_tracking():
                 }
 
                 mapped_status = status_map.get(new_status_text)
-                if not mapped_status or mapped_status == item.status:
-                    continue  # no meaningful change
+                if not mapped_status or mapped_status == order.status:
+                    continue  # no change
 
-                old_status = item.status
+                old_status = order.status
                 with transaction.atomic():
-                    item.status = mapped_status
-                    item.save(update_fields=["status"])
-                    logger.info(
-                        f"✅ Item {item.id} ({item.product_variant}) "
-                        f"{old_status} → {mapped_status}"
-                    )
+                    # Update all items under this order
+                    order.items.update(status=mapped_status)
 
-                    # 🧩 Update parent order status accordingly
-                    order = item.order
-                    all_statuses = list(order.items.values_list("status", flat=True))
-
-                    if all(s == "delivered" for s in all_statuses):
-                        order.status = "delivered"
-                    elif any(s == "shipped" for s in all_statuses):
-                        order.status = "shipped"
-                    elif all(s == "cancelled" for s in all_statuses):
-                        order.status = "cancelled"
-                    elif any(s == "processing" for s in all_statuses):
-                        order.status = "processing"
-                    else:
-                        order.status = order.status  # no change
-
+                    # Update order status
+                    order.status = mapped_status
                     order.save(update_fields=["status"])
+
+                    logger.info(
+                        f"✅ Order {order.order_number} {old_status} → {mapped_status}"
+                    )
 
                 # Delay slightly between tracking calls (avoid rate-limit)
                 time.sleep(1)
@@ -80,3 +73,59 @@ def auto_update_tracking():
 
         # Run every 3 hours
         time.sleep(3 * 60 * 60)
+
+
+def apply_commission_cron(request):
+    """
+    Triggered by an external scheduler (cron-job.org).
+    Applies promoter commission for orders where:
+      - Order is paid
+      - Commission not yet applied
+      - Order has at least one delivered, returnable item whose return period is over
+    """
+
+    # 1️⃣ Security check
+    secret = request.headers.get("X-CRON-KEY")
+    if secret != settings.CRON_SECRET_KEY:
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+
+    # 2️⃣ Fetch orders eligible for commission
+    orders = Order.objects.filter(is_paid=True, is_commission_applied=False)
+    applied_count = 0
+
+    for order in orders:
+        eligible_items = order.items.filter(
+            status=OrderItemStatus.DELIVERED
+        )
+
+        commission_due = False
+        for item in eligible_items:
+            pv = item.product_variant
+            if not pv.allow_return:
+                # Non-returnable item → commission can be applied immediately
+                commission_due = True
+                break
+
+            # Check return period
+            delivered_date = order.delivered_at.date() if order.delivered_at else None
+            if not delivered_date:
+                continue
+
+            return_days = pv.return_days or 0
+            return_end_date = delivered_date + timedelta(days=return_days)
+
+            if (return_end_date - date.today()).days <= 0:
+                commission_due = True
+                break
+
+        if commission_due:
+            # Apply commission for this order
+            apply_promoter_commission(order)
+            order.is_commission_applied = True
+            order.save()
+            applied_count += 1
+
+    return JsonResponse({
+        "status": "success",
+        "message": f"Commission applied for {applied_count} orders."
+    })

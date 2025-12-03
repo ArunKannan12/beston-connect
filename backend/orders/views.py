@@ -13,7 +13,7 @@ from .serializers import (ShippingAddressSerializer,
                         )
 from products.models import ProductVariant
 import requests
-
+from decimal import Decimal
 
 from rest_framework.generics import (ListAPIView,RetrieveAPIView,ListCreateAPIView,
                                     RetrieveUpdateDestroyAPIView)
@@ -65,6 +65,7 @@ def get_or_create_shipping_address(user, address_data):
 
 
 class ReferralCheckoutAPIView(APIView):
+   
     permission_classes = [IsCustomer]
 
     @transaction.atomic
@@ -76,17 +77,14 @@ class ReferralCheckoutAPIView(APIView):
         result = process_checkout(
             user=request.user,
             items=data.get("items"),
-            shipping_address_input=data.get("shipping_address") or data.get("shipping_address_id"),  # <-- fixed
+            shipping_address_input=data.get("shipping_address") or data.get("shipping_address_id"),
             payment_method=data.get("payment_method"),
             promoter_code=request.query_params.get("ref"),
-            is_cart=False
+            is_cart=False,
+            checkout_session_id=request.data.get("checkout_session_id") or request.data.get("unique_identifier"),
         )
 
-        return Response(
-            result["response"],
-            status=status.HTTP_200_OK if result["order"].payment_method == "Razorpay" else status.HTTP_400_BAD_REQUEST
-        )
-
+        return Response(result["response"], status=status.HTTP_200_OK)
 
 class CartCheckoutAPIView(APIView):
     permission_classes = [IsCustomer]
@@ -103,14 +101,47 @@ class CartCheckoutAPIView(APIView):
 
         result = process_checkout(
             user=request.user,
-            items=cart_items,
+            items=cart_items,  # cart items include referral_code
             shipping_address_input=data.get("shipping_address") or data.get("shipping_address_id"),
             payment_method=data.get("payment_method"),
-            promoter_code=data.get("referral_code"),
-            is_cart=True
+            is_cart=True,  # cart mode
+            promoter_code=None,  # ❌ never pass promoter_code
+            checkout_session_id=request.data.get("checkout_session_id") or request.data.get("unique_identifier"),
         )
 
         return Response(result["response"], status=status.HTTP_200_OK)
+
+class BuyNowAPIView(APIView):
+    permission_classes = [IsCustomer]
+
+    @transaction.atomic
+    def post(self, request):
+        items = request.data.get("items", [])
+        if not items or not isinstance(items, list):
+            return Response({"detail": "No valid items provided."}, status=status.HTTP_400_BAD_REQUEST)
+
+        for item in items:
+            if "product_variant_id" not in item or "quantity" not in item or int(item["quantity"]) <= 0:
+                return Response({"detail": "Invalid items or quantity"}, status=status.HTTP_400_BAD_REQUEST)
+
+        shipping_address_input = request.data.get("shipping_address") or request.data.get("shipping_address_id")
+        payment_method = request.data.get("payment_method", "").strip()
+
+        if payment_method.lower() != "razorpay":
+            return Response({"detail": "Only Razorpay payments are supported"}, status=status.HTTP_400_BAD_REQUEST)
+
+        result = process_checkout(
+            user=request.user,
+            items=items,        # buy-now items contain their own referral_code
+            shipping_address_input=shipping_address_input,
+            payment_method=payment_method,
+            is_cart=False,
+            promoter_code=None,  # ❌ do NOT pass item referral here
+            checkout_session_id=request.data.get("checkout_session_id") or request.data.get("unique_identifier"),
+        )
+
+        return Response(result["response"], status=status.HTTP_200_OK)
+
 
 class OrderDetailAPIView(RetrieveAPIView):
     serializer_class = OrderDetailSerializer
@@ -136,16 +167,18 @@ class OrderPaymentAPIView(APIView):
             raise ValidationError("Order is already paid")
 
         method = request.data.get("payment_method", "Razorpay").strip()
-        if method != "Razorpay":
+        if method.lower() != "razorpay":
             raise ValidationError("Only Razorpay payments are supported")
 
         result = process_checkout(
             user=user,
             existing_order=order,
-            payment_method=method
+            payment_method=method,
+            checkout_session_id=request.data.get("checkout_session_id") or request.data.get("unique_identifier"),
         )
 
-        return Response(result['response'])
+        return Response(result["response"], status=status.HTTP_200_OK)
+
 
 class CancelOrderAPIView(APIView):
     permission_classes = [IsAdminOrCustomer]
@@ -162,11 +195,12 @@ class CancelOrderAPIView(APIView):
         """
         user = request.user
         role = getattr(user, "role", None)
-        item_ids = request.data.get("item_ids", None)
+        item_ids = request.data.get("item_ids")
         cancel_reason = request.data.get("cancel_reason", "").strip() or "No reason provided"
 
         cancellable_statuses = [OrderItemStatus.PENDING, OrderItemStatus.PROCESSING]
-        # --- Fetch order safely ---
+
+        # --- Fetch order ---
         try:
             order = (
                 Order.objects.get(order_number=order_number)
@@ -176,21 +210,16 @@ class CancelOrderAPIView(APIView):
         except Order.DoesNotExist:
             return Response({"detail": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        # --- Validate item selection ---
+        # --- Identify items to cancel ---
         if item_ids:
-            items_to_cancel = order.items.filter(
-                id__in=item_ids, status__in=cancellable_statuses
-            )
+            items_to_cancel = order.items.filter(id__in=item_ids, status__in=cancellable_statuses)
             if not items_to_cancel.exists():
                 valid_ids = list(
                     order.items.filter(status__in=cancellable_statuses)
                     .values_list("id", flat=True)
                 )
                 return Response(
-                    {
-                        "detail": "No valid items to cancel.",
-                        "valid_item_ids": valid_ids,
-                    },
+                    {"detail": "No valid items to cancel.", "valid_item_ids": valid_ids},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         else:
@@ -202,57 +231,43 @@ class CancelOrderAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # --- Refund (if prepaid) ---
+        # --- Refund logic (if prepaid) ---
         refund_obj = None
         if order.is_paid:
             try:
-                refund_id = process_refund(order)  # external Razorpay refund
+                refund_id = process_refund(order)  # external Razorpay refund call
                 refund_obj = Refund.objects.create(
                     order=order,
                     refund_id=refund_id,
                     amount=order.total,
                     status="processed",
                     processed_at=timezone.now(),
-                    notes=f"Auto refund triggered for cancelled order {order.order_number}"
+                    notes=f"Auto refund triggered for cancelled order {order.order_number}",
                 )
                 order.has_refund = True
                 order.save(update_fields=["has_refund"])
             except Exception as e:
-                print("⚠️ Refund failed:", str(e))
+               
                 refund_obj = Refund.objects.create(
                     order=order,
                     amount=order.total,
                     status="failed",
-                    notes=f"Refund error: {str(e)}"
+                    notes=f"Refund error: {str(e)}",
                 )
 
-        # --- Restock & Cancel items individually ---
+        # --- Cancel items & restock ---
         cancelled_items_data = []
-        delhivery_cancellations = []
-
         for item in items_to_cancel:
             variant = item.product_variant
             variant.stock += item.quantity
             variant.save(update_fields=["stock"])
 
-            item.status =  OrderItemStatus.CANCELLED
+            item.status = OrderItemStatus.CANCELLED
             item.cancel_reason = cancel_reason
             item.refund_amount = item.price * item.quantity if order.is_paid else 0
             item.save(update_fields=["status", "cancel_reason", "refund_amount"])
 
             create_warehouse_log(item, updated_by=user, comment="Order item cancelled")
-
-            # --- Cancel Delhivery shipment per item ---
-            delhivery_response = None
-            if item.waybill:
-                delhivery_response = cancel_delhivery_shipment(item.waybill)
-                delhivery_cancellations.append(
-                    {
-                        "item_id": item.id,
-                        "waybill": item.waybill,
-                        "response": delhivery_response,
-                    }
-                )
 
             cancelled_items_data.append(
                 {
@@ -263,12 +278,17 @@ class CancelOrderAPIView(APIView):
                 }
             )
 
-        # --- Update overall order status ---
-        active_items = order.items.filter(status__in=cancellable_statuses)
-        if active_items.exists():
-            order.status = "partially_cancelled"
-        else:
-            order.status = "cancelled"
+        # --- Cancel the Delhivery shipment (one per order) ---
+        delhivery_response = None
+        if order.waybill:
+            try:
+                delhivery_response = cancel_delhivery_shipment(order.waybill)
+            except Exception as e:
+                delhivery_response = {"success": False, "message": str(e)}
+
+        # --- Update order status ---
+        remaining_active = order.items.filter(status__in=cancellable_statuses)
+        order.status = "partially_cancelled" if remaining_active.exists() else "cancelled"
 
         order.cancel_reason = cancel_reason
         order.cancelled_at = timezone.now()
@@ -286,6 +306,8 @@ class CancelOrderAPIView(APIView):
             ]
         )
 
+        create_warehouse_log(order, updated_by=user, comment="Order cancelled")
+
         # --- Response ---
         return Response(
             {
@@ -298,14 +320,14 @@ class CancelOrderAPIView(APIView):
                     "cancel_reason": order.cancel_reason,
                     "cancelled_by": getattr(order.cancelled_by, "email", None),
                     "cancelled_by_role": order.cancelled_by_role,
-                    "delhivery_cancellations": delhivery_cancellations,
+                    "waybill": order.waybill,
+                    "delhivery_response": delhivery_response,
                     "cancelled_items": cancelled_items_data,
                 },
             },
             status=status.HTTP_200_OK,
         )
 
-    
 class RazorpayOrderCreateAPIView(APIView):
     permission_classes = [IsCustomer]
 
@@ -316,10 +338,13 @@ class RazorpayOrderCreateAPIView(APIView):
         if order.is_paid or order.status.lower() in ["processing", "delivered", "cancelled"]:
             raise ValidationError("Cannot initiate payment for this order")
 
-        # Call helper without changing payment method (assume Razorpay)
-        result = process_checkout(user=request.user, existing_order=order)
+        result = process_checkout(
+            user=request.user,
+            existing_order=order,
+            checkout_session_id=request.data.get("checkout_session_id") or request.data.get("unique_identifier"),
+        )
 
-        return Response(result)
+        return Response(result["response"], status=status.HTTP_200_OK)
 
 
 # --------- RazorpayPaymentVerifyAPIView (input changed) ---------
@@ -337,9 +362,9 @@ class RazorpayPaymentVerifyAPIView(APIView):
             raise ValidationError("Missing Razorpay payment details")
 
         order = get_object_or_404(Order, order_number=order_number, user=request.user)
-
         client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
 
+        # Verify payment with Razorpay
         result = verify_razorpay_payment(
             order=order,
             razorpay_order_id=razorpay_order_id,
@@ -348,7 +373,36 @@ class RazorpayPaymentVerifyAPIView(APIView):
             user=request.user,
             client=client
         )
-        return Response({"success": True, "message": "Payment verified", "data": result})
+
+        # ✅ Mark order paid and deduct stock
+        if not order.is_paid:
+            order.is_paid = True
+            order.save(update_fields=["is_paid"])
+
+            for item in order.items.all():
+                variant = item.product_variant
+                if variant.stock < item.quantity:
+                    raise ValidationError(f"Not enough stock for {variant}")
+                variant.stock -= item.quantity
+                variant.save(update_fields=["stock"])
+
+        # ✅ Apply recovery now
+        if hasattr(order.user, "recovery_account"):
+            from orders.utils import apply_return_recovery
+            delivery_charge_with_recovery, applied_recovery = apply_return_recovery(
+                user=order.user,
+                order=order,
+                delivery_charge=order.delivery_charge
+            )
+            order.delivery_charge = delivery_charge_with_recovery
+            order.total = (order.subtotal + delivery_charge_with_recovery).quantize(Decimal("0.01"))
+            order.save(update_fields=["delivery_charge", "total"])
+
+        return Response({
+            "success": True,
+            "message": "Payment verified, stock updated, recovery applied",
+            "data": result
+        })
 
 
 class ShippingAddressListCreateView(ListCreateAPIView):
@@ -398,34 +452,6 @@ class ShippingAddressRetrieveUpdateDestroyView(RetrieveUpdateDestroyAPIView):
         instance.delete()
         logger.info(f"Shipping address {instance.id} deleted by {self.request.user.email}")
 
-class BuyNowAPIView(APIView):
-    permission_classes = [IsCustomer]
-
-    @transaction.atomic
-    def post(self, request):
-        items = request.data.get("items", [])
-        if not items or not isinstance(items, list):
-            return Response({"detail": "No valid items provided."}, status=status.HTTP_400_BAD_REQUEST)
-
-        for item in items:
-            if "product_variant_id" not in item or "quantity" not in item or int(item["quantity"]) <= 0:
-                return Response({"detail": "Invalid items or quantity"}, status=status.HTTP_400_BAD_REQUEST)
-
-        shipping_address_input = request.data.get("shipping_address") or request.data.get("shipping_address_id")
-        payment_method = request.data.get("payment_method", "").strip()
-
-        if payment_method.lower() != "razorpay":
-            return Response({"detail": "Only Razorpay payments are supported"}, status=status.HTTP_400_BAD_REQUEST)
-
-        result = process_checkout(
-            user=request.user,
-            items=items,
-            shipping_address_input=shipping_address_input,
-            payment_method=payment_method,
-            is_cart=False
-        )
-
-        return Response(result["response"], status=status.HTTP_200_OK)
 
 # --------- OrderListAPIView (customer-facing response) ---------
 class OrderListAPIView(ListAPIView):
@@ -457,48 +483,59 @@ class OrderListAPIView(ListAPIView):
             )
 
         return queryset
-
-
-
+    
 class OrderPreviewAPIView(APIView):
     permission_classes = [IsCustomer]
     
     def post(self, request):
-        # 1️⃣ Validate input
         serializer = OrderPreviewInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        # 2️⃣ Calculate subtotal using existing logic
+        user = request.user
+
+        # 1️⃣ Calculate subtotal
         result = calculate_order_preview(data["items"], data["postal_code"])
 
-        # 3️⃣ Calculate total weight (example: 0.5kg per item)
+        # 2️⃣ Total weight in grams
         total_weight_kg = 0
         for item in data['items']:
-            variant=ProductVariant.objects.get(id=item['product_variant_id'])
+            variant = ProductVariant.objects.get(id=item['product_variant_id'])
             total_weight_kg += item['quantity'] * variant.weight
-        total_weight_g=total_weight_kg * 1000
-        # 4️⃣ Get delivery charge from Delhivery
+        total_weight_g = total_weight_kg * 1000
+
+        # 3️⃣ Base delivery charge from Delhivery
         delivery_info = get_delivery_charge(
-            o_pin="643212",                # your warehouse PIN
-            d_pin=data["postal_code"],     # customer PIN
+            o_pin=settings.DELHIVERY_PICKUP.get('pin'),
+            d_pin=data["postal_code"],
             weight_grams=total_weight_g,
             payment_type="Pre-paid"
         )
+        base_delivery_charge = Decimal(delivery_info.get("charge", 0))
+
+        # 4️⃣ Estimated TAT
         tat_info = get_expected_tat(
-            origin_pin="643212",
+            origin_pin=settings.DELHIVERY_PICKUP.get('pin'),
             destination_pin=data["postal_code"],
-            mot='E',       # Express
-            pdt='B2C'      # Business to customer
+            mot='E',
+            pdt='B2C'
         )
-        # 5️⃣ Add delivery info to result safely
-        result["delivery_charge"] = delivery_info.get("charge", 0)
+
+        # 5️⃣ Add recovery amount for display only
+        recovery_for_preview = Decimal("0.00")
+        if hasattr(user, "recovery_account") and user.recovery_account.balance_due > 0:
+            dynamic_recovery = (user.recovery_account.balance_due * Decimal("0.10")).quantize(Decimal("0.01"))
+            recovery_for_preview = min(max(dynamic_recovery, Decimal("5.00")), Decimal("10.00"), user.recovery_account.balance_due)
+
+        # FINAL delivery charge = base + recovery (preview only, not debited)
+        final_delivery_charge = base_delivery_charge + recovery_for_preview
+
+        # 6️⃣ Assign into result
+        result["delivery_charge"] = float(final_delivery_charge)
         result["estimated_delivery_days"] = tat_info.get("tat_days")
-        result["total"] = float(result["subtotal"]) + result["delivery_charge"]
+        result["total"] = float(result["subtotal"]) + float(final_delivery_charge)
 
-        # 6️⃣ Return response
         return Response(OrderPreviewOutputSerializer(result).data, status=status.HTTP_200_OK)
-
 
 from .serializers import ShipmentTrackingSerializer
 class OrderTrackingAPIView(APIView):
@@ -506,101 +543,54 @@ class OrderTrackingAPIView(APIView):
 
     def get(self, request, order_number):
         """
-        Fetch tracking info for all items in an order from Delhivery API.
-        Each OrderItem may have its own waybill and tracking URL.
-        """
-        # 1️⃣ Validate order existence
-        try:
-            order = Order.objects.get(order_number=order_number)
-        except Order.DoesNotExist:
-            return Response(
-                {"success": False, "message": "Order not found"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        # 2️⃣ Restrict access
-        if not request.user.is_staff and order.user != request.user:
-            return Response(
-                {"success": False, "message": "Not authorized to view this order"},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        # 3️⃣ Prepare tracking details for each order item
-        tracking_results = []
-        order_items = order.items.all()
-
-        if not order_items.exists():
-            return Response(
-                {"success": False, "message": "No items found in this order"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        for item in order_items:
-            waybill = item.waybill
-            ref_id = f"ITEM-{item.id}"
-
-            if not waybill:
-                tracking_results.append({
-                    "item_id": item.id,
-                    "product": str(item.product_variant),
-                    "waybill": None,
-                    "tracking_url": None,
-                    "tracking": None,
-                    "message": "Waybill not yet generated."
-                })
-                continue
-
-            tracking_info = track_delhivery_shipment(waybill=waybill, ref_id=ref_id)
-
-            if tracking_info.get("success"):
-                summary = tracking_info.get("summary")
-                serializer = ShipmentTrackingSerializer(
-                    summary, many=isinstance(summary, list)
-                )
-                tracking_data = serializer.data
-                message = "Tracking fetched successfully"
-            else:
-                tracking_data = None
-                message = tracking_info.get("message", "Tracking unavailable")
-
-            tracking_results.append({
-                "item_id": item.id,
-                "product": str(item.product_variant),
-                "waybill": waybill,
-                "tracking_url": item.tracking_url,
-                "tracking": tracking_data,
-                "message": message,
-            })
-
-        # 4️⃣ Return combined response
-        return Response(
-            {
-                "success": True,
-                "order_number": order.order_number,
-                "tracking_items": tracking_results,
-            },
-            status=status.HTTP_200_OK,
-        )
-
-class GenerateDelhiveryLabelsAPIView(APIView):
-    permission_classes = [IsAdmin]
-
-    def get(self, request, order_number):
-        """
-        Generate Delhivery packing slips (PDF labels) for all items in an order.
+        Fetch tracking info for the order's waybill (single shipment).
         """
         try:
             order = Order.objects.get(order_number=order_number)
         except Order.DoesNotExist:
             return Response({"success": False, "message": "Order not found"}, status=404)
 
-        # get all items that already have a waybill
-        items = order.items.filter(waybill__isnull=False)
-        if not items.exists():
-            return Response({"success": False, "message": "No waybills found for this order"}, status=400)
+        if not request.user.is_staff and order.user != request.user:
+            return Response({"success": False, "message": "Not authorized"}, status=403)
 
-        # combine all waybills into a single comma-separated string
-        waybills = ",".join(items.values_list("waybill", flat=True))
+        if not order.waybill:
+            return Response({"success": False, "message": "Waybill not yet generated"}, status=400)
+
+        tracking_info = track_delhivery_shipment(waybill=order.waybill, ref_id=f"ORDER-{order.id}")
+        if tracking_info.get("success"):
+            summary = tracking_info.get("summary")
+            serializer = ShipmentTrackingSerializer(summary, many=isinstance(summary, list))
+            tracking_data = serializer.data
+            message = "Tracking fetched successfully"
+        else:
+            tracking_data = None
+            message = tracking_info.get("message", "Tracking unavailable")
+
+        return Response({
+            "success": True,
+            "order_number": order.order_number,
+            "waybill": order.waybill,
+            "courier": order.courier,
+            "tracking_url": order.delhivery_tracking_url,
+            "tracking": tracking_data,
+            "message": message,
+        })
+
+
+class GenerateDelhiveryLabelsAPIView(APIView):
+    permission_classes = [IsAdmin]
+
+    def get(self, request, order_number):
+        """
+        Generate Delhivery packing slip (PDF label) for the order's single shipment.
+        """
+        try:
+            order = Order.objects.get(order_number=order_number)
+        except Order.DoesNotExist:
+            return Response({"success": False, "message": "Order not found"}, status=404)
+
+        if not order.waybill:
+            return Response({"success": False, "message": "No waybill assigned to this order"}, status=400)
 
         url = "https://track.delhivery.com/api/p/packing_slip"
         headers = {
@@ -608,7 +598,7 @@ class GenerateDelhiveryLabelsAPIView(APIView):
             "Accept": "application/json",
         }
         params = {
-            "wbns": waybills,
+            "wbns": order.waybill,
             "pdf": "true",
             "pdf_size": "A4",
         }
@@ -622,38 +612,22 @@ class GenerateDelhiveryLabelsAPIView(APIView):
         except requests.RequestException as e:
             return Response({"success": False, "message": f"Delhivery request failed: {str(e)}"}, status=502)
 
-        packages = data.get("packages", [])
-        if not packages:
-            return Response({"success": False, "message": "No packages found in response"}, status=400)
+        package = next((p for p in data.get("packages", []) if p.get("waybill") == order.waybill), None)
+        if not package or not package.get("pdf_download_link"):
+            return Response({"success": False, "message": "No label found for this waybill"}, status=400)
 
-        updated_items = []
-        for package in packages:
-            waybill = package.get("waybill")
-            pdf_link = package.get("pdf_download_link")
-            if not (waybill and pdf_link):
-                continue
+        order.label_url = package["pdf_download_link"]
+        order.label_generated_at = timezone.now()
+        order.save(update_fields=["label_url", "label_generated_at"])
 
-            item = items.filter(waybill=waybill).first()
-            if item:
-                item.label_url = pdf_link
-                item.label_generated_at = timezone.now()
-                item.save(update_fields=["label_url", "label_generated_at"])
-                updated_items.append({
-                    "item_id": item.id,
-                    "waybill": waybill,
-                    "label_url": pdf_link,
-                })
-
-        create_warehouse_log(
-            order,
-            updated_by=request.user,
-            comment=f"Generated Delhivery labels for {len(updated_items)} item(s)"
-        )
+        create_warehouse_log(order, updated_by=request.user, comment="Delhivery label generated")
 
         return Response({
             "success": True,
-            "message": f"Delhivery labels generated for {len(updated_items)} item(s)",
+            "message": "Delhivery label generated successfully",
             "order_number": order.order_number,
-            "labels": updated_items,
+            "waybill": order.waybill,
+            "label_url": order.label_url,
         })
+
 

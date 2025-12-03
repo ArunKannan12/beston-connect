@@ -1,16 +1,29 @@
 import { Fragment } from "react";
 import { Listbox, Transition } from "@headlessui/react";
 import { Check, ChevronDown } from "lucide-react";
+import { useNavigate, useLocation } from "react-router-dom";
 
 const VariantDropdown = ({ product, selectedVariant, setSelectedVariant, setQuantity, setCurrentImg }) => {
+  const navigate = useNavigate();
+  const location = useLocation();
+
   return (
     <Listbox
       value={selectedVariant}
       onChange={(variant) => {
-        setSelectedVariant(variant);
-        setQuantity(1);
-        setCurrentImg(0);
-      }}
+      setSelectedVariant(variant);
+      setQuantity(1);
+      setCurrentImg(0);
+
+      const params = new URLSearchParams(location.search);
+      params.set("variant", variant.variant_name); // plain string
+      params.delete('ref')
+      sessionStorage.removeItem('referral_code')
+      const queryString = params.toString().replace(/\+/g, "%20"); // replace + with %20
+      navigate(`${location.pathname}?${queryString}`, { replace: true });
+}}
+
+
     >
       <div className="relative w-full">
         <Listbox.Button className="relative w-full border border-gray-300 rounded-md bg-white pl-3 pr-8 py-2 text-left cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500 flex justify-between items-center">

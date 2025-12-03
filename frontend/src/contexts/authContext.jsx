@@ -4,7 +4,7 @@ import { useMergeGuestCartMutation } from "./cartSlice";
 import { syncGuestcart } from "../utils/syncGuestCart";
 import { toast } from "react-toastify";
 import { getCookie } from "../utils/getCookie";
-import { useNavigate } from "react-router-dom";
+
 
 // Create context
 export const AuthContext = createContext({
@@ -12,11 +12,13 @@ export const AuthContext = createContext({
   isAuthenticated: false,
   loading: true,
   login: () => {},
+  fetchProfile: ()=>{},
   logout: () => {},
   setUser: () => {},
   hasRole: () => false,
   isAdmin: () => false,
   isPromoter:()=>false,
+  hasPromoterRole:()=>false,
   isWarehouseStaff: () => false,
 });
 
@@ -34,6 +36,21 @@ export const AuthProvider = ({ children }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loading, setLoading] = useState(true);
   const [mergeGuestCart] = useMergeGuestCartMutation();
+  
+  // 📌 Capture referral code from URL on ANY page load (even manual refresh)
+useEffect(() => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const ref = params.get("ref");
+
+    if (ref) {
+      console.log("Captured referral code:", ref);
+      localStorage.setItem("referral_code", ref);
+    }
+  } catch (err) {
+    console.error("Referral capture error:", err);
+  }
+}, []);
 
 
   // ✅ Fetch logged-in user
@@ -42,7 +59,8 @@ export const AuthProvider = ({ children }) => {
     try {
       const res = await axiosInstance.get("auth/profile/");
       setUser(res.data);
-          
+
+      
       setIsAuthenticated(true);
       return res.data;
     } catch (error) {
@@ -60,7 +78,7 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   // ✅ Login (email/password or OAuth)
-  const login = async (credentials = null, tokenData = null, redirectFrom = "/") => {
+  const login = async (credentials = null, tokenData = null, redirectFrom = "/", navigate = null) => {
     setLoading(true);
     try {
       await ensureCsrfCookie();
@@ -69,17 +87,15 @@ export const AuthProvider = ({ children }) => {
         await axiosInstance.post("auth/jwt/create/", credentials);
       }
 
-      const user = await fetchProfile(); // fetch fresh profile from backend
+      const user = await fetchProfile();
 
       if (!user) {
-        // Login failed, no user returned
         setUser(null);
         setIsAuthenticated(false);
         return { success: false };
       }
 
       if (!user.is_active) {
-        // User is inactive (blocked)
         toast.info("Your account is inactive. Contact support.");
         setUser(null);
         setIsAuthenticated(false);
@@ -87,40 +103,66 @@ export const AuthProvider = ({ children }) => {
       }
 
       if (!user.is_verified) {
-        // User is unverified
         toast.info("Your account isn't verified yet. Please check your email.");
         setUser(user);
         setIsAuthenticated(false);
         return { success: false, reason: "unverified", email: user.email };
       }
 
-      // ✅ User is active and verified
+      // User OK
       setUser(user);
       setIsAuthenticated(true);
 
-      // Merge guest cart if any
+      // --- Merge Guest Cart ---
       const buyNowMinimal = JSON.parse(sessionStorage.getItem("buyNowMinimal") || "null");
       if (buyNowMinimal) {
-        const itemsToMerge = Array.isArray(buyNowMinimal) ? buyNowMinimal : [buyNowMinimal];
-        await syncGuestcart(mergeGuestCart, itemsToMerge);
+        sessionStorage.setItem("BUY_NOW_ACTIVE", "true"); 
       }
 
       const guestCart = JSON.parse(localStorage.getItem("cart") || "[]");
       if (guestCart.length > 0) {
-        await syncGuestcart(mergeGuestCart, guestCart);
+        await syncGuestcart(mergeGuestCart, guestCart, null, navigate);
       }
 
-      let redirectPath = redirectFrom || '/';
-      if (user.role === "admin") {
+      // 🔥 FIXED REDIRECT LOGIC
+      // -------------------------
+
+      let redirectPath = redirectFrom || "/"; // ← Respect Buy Now / Checkout redirect
+      const isReferralLogin = redirectFrom !== "/";
+
+      if(!isReferralLogin){
+
+      
+      if (user.roles?.includes("promoter") && user.active_role === "promoter") {
+        // Active promoter → redirect to promoter dashboard
+        redirectPath = user.promoter_type === "paid"
+          ? "/promoter/dashboard/paid"
+          : "/promoter/dashboard/unpaid";
+
+      } else if (user.role === "admin") {
+
         redirectPath = "/admin/dashboard";
-      } else if (user.roles?.includes("promoter") && user.active_role === 'promoter') {
-        redirectPath=user.promoter_type === 'paid'
-        ? '/promoter/dashboard/paid'
-        : '/promoter/dashboard/unpaid'
-      }else if(user.role === 'customer'){
-        redirectPath='/'
+
+      } else if (user.roles?.includes("promoter") && user.active_role !== "promoter") {
+
+        // Non-active promoter → show message ONLY if it's normal login
+        if (redirectFrom === "/") {
+          toast.info(
+            "You’re already a promoter! Switch to the Promoter Dashboard to manage your account."
+          );
+        }
+
+        // DO NOT override redirectPath — Buy Now path is preserved
       }
-      return { success: true, from: redirectPath ,user};
+    }
+      // Final navigation
+      if (navigate) {
+        navigate(redirectPath, { replace: true });
+      }
+
+
+      return { success: true, from: redirectPath, user };
+
     } catch (err) {
       console.error("Login failed", err);
       toast.error("Login failed. Please check your credentials.");
@@ -131,6 +173,7 @@ export const AuthProvider = ({ children }) => {
       setLoading(false);
     }
   };
+
 
 
   // ✅ Logout
@@ -151,7 +194,7 @@ export const AuthProvider = ({ children }) => {
     const hasRole = (role) => {
       if (!user) return false;
       if (role === 'promoter'){
-        return user.roles?.included('promoter') && user.active_role === 'promoter';
+        return user.roles?.includes('promoter') && user.active_role === 'promoter';
       }
       return user.role === role || user.active_role === role;
     };
@@ -159,9 +202,8 @@ export const AuthProvider = ({ children }) => {
     const isAdmin = () =>
       hasRole("admin") || user?.is_staff;
 
-    const isPromoter = () =>
-        user?.roles?.includes('promoter') && user.active_role === 'promoter';
-
+    const isActivePromoter = () => user?.roles?.includes("promoter") && user.active_role === "promoter";
+    const hasPromoterRole = () => user?.roles?.includes("promoter");
     const isCustomer = () => user?.active_role === "customer";
     
 
@@ -176,8 +218,10 @@ export const AuthProvider = ({ children }) => {
         setUser,
         hasRole,
         isAdmin,
-        isPromoter,
-    
+        isPromoter:isActivePromoter,
+        hasPromoterRole,
+        isCustomer,
+        fetchProfile
       }}
     >
       {children}

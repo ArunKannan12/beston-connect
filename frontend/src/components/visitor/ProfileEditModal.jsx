@@ -98,54 +98,52 @@ const ProfileEditModal = ({ show, onHide, user, setUser }) => {
     setSaving(true);
     try {
       const userFormData = new FormData();
-
-      // Append only actual fields
       Object.entries(form).forEach(([key, value]) => {
         if (value != null) userFormData.append(key, value);
       });
-
-      // Append file only if user selected one
-      if (imageFile) {
-        console.log("Appending image file:", imageFile);
-        userFormData.append('custom_user_profile', imageFile);
-      }
-
-      console.log("FormData entries before sending:");
-      for (let pair of userFormData.entries()) {
-        console.log(pair[0], pair[1]);
-      }
+      if (imageFile) userFormData.append('custom_user_profile', imageFile);
 
       const res = await axiosInstance.patch('auth/profile/', userFormData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-
-      console.log("Response from profile update:", res.data);
 
       setUser(res.data);
       toast.success('Profile updated successfully');
       handleClose();
     } catch (err) {
       console.error("Profile update error:", err);
-      toast.error('Failed to update profile');
+
+      // --- Improved error handling ---
+      if (err.response && err.response.data) {
+        const data = err.response.data;
+        if (typeof data === 'object') {
+          // Collect all validation errors into a single string
+          const messages = [];
+          for (const key in data) {
+            if (Array.isArray(data[key])) messages.push(...data[key]);
+            else messages.push(data[key]);
+          }
+          toast.error(messages.join(' | '));
+        } else if (typeof data === 'string') {
+          toast.error(data);
+        }
+      } else {
+        toast.error('Failed to update profile');
+      }
     } finally {
       setSaving(false);
     }
   };
 
-
   const handleDelete = async () => {
     setSaving(true);
     try {
       const formData = new FormData();
-      formData.append('delete_profile_pic', 'true'); // only this
-
-      console.log("Deleting profile pic, FormData:", Array.from(formData.entries()));
+      formData.append('delete_profile_pic', 'true');
 
       const res = await axiosInstance.patch('auth/profile/', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-
-      console.log("Response from delete profile pic:", res.data);
 
       setUser(res.data);
       toast.success('Profile picture deleted');
@@ -153,12 +151,30 @@ const ProfileEditModal = ({ show, onHide, user, setUser }) => {
       handleClose();
     } catch (err) {
       console.error("Delete profile pic error:", err);
-      toast.error('Failed to delete picture');
+
+      // Show backend error if exists
+      if (err.response && err.response.data) {
+        const data = err.response.data;
+        if (typeof data === 'object') {
+          const messages = [];
+          for (const key in data) {
+            if (Array.isArray(data[key])) messages.push(...data[key]);
+            else messages.push(data[key]);
+          }
+          toast.error(messages.join(' | '));
+        } else if (typeof data === 'string') {
+          toast.error(data);
+        }
+      } else {
+        toast.error('Failed to delete picture');
+      }
+
       setConfirmDelete(false);
     } finally {
       setSaving(false);
     }
   };
+
 
   return (
     <>
@@ -184,7 +200,7 @@ const ProfileEditModal = ({ show, onHide, user, setUser }) => {
           ].map(({ label, name, type = 'text' }) => {
             const isNameField = name === 'first_name' || name === 'last_name';
             const isDisabled = isNameField && user.auth_provider !== 'email';
-
+      
             return (
               <div key={name}>
                 <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>

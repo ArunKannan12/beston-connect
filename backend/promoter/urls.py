@@ -10,7 +10,8 @@ from .views import (
     VerifyPremiumPaymentAPIView,
     PromoterProductsAPIView,
     PremiumAmountAPIView,
-    PromoterMeAPIView,UnpaidPromoterStatsAPIView,
+    PromoterMeAPIView,
+    UnpaidPromoterDashboardAPIView,
     AvailableProductsForPromotionAPIView,
     PaidPromoterDashboardAPIView,
     PromoterWalletSummaryAPIView,
@@ -18,7 +19,8 @@ from .views import (
     RegisterPromoterClickAPIview,
     PromoteProductAPIView,
     PromotedProductListAPIView,
-     PincodeServiceabilityView
+     PincodeServiceabilityView,
+     RegisterPromoterClickAPIView,
 
 )
 
@@ -45,7 +47,7 @@ urlpatterns = [
     
      path("promoters/me/", PromoterMeAPIView.as_view(), name="promoter-me"),
 
-    path("unpaid/dashboard/", UnpaidPromoterStatsAPIView.as_view(), name="unpaid-promoter-dashboard"),
+    path("unpaid/dashboard/", UnpaidPromoterDashboardAPIView.as_view(), name="unpaid-promoter-dashboard"),
     path("available-products/", AvailableProductsForPromotionAPIView.as_view(), name="available-products-for-promotion"),
 
     # Paid promoter dashboard
@@ -57,6 +59,6 @@ urlpatterns = [
     path("promote/products", PromoteProductAPIView.as_view(), name="promote-product"),
     path("promoted-products/", PromotedProductListAPIView.as_view(), name="promoted-products"),
     path("click/register/", RegisterPromoterClickAPIview.as_view(), name="register-click"),
-
+    path("promoter/register-click/", RegisterPromoterClickAPIView.as_view(), name=""),
     path("check-pincode/<str:pin>/", PincodeServiceabilityView.as_view(), name="check_pincode"),
 ]

@@ -6,6 +6,7 @@ from products.models import ProductVariant
 from orders.models import Order
 from django.core.validators import RegexValidator
 from products.serializers import ProductVariantSerializer
+from urllib.parse import quote
 
 class PromotedProductSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product_variant.product.name', read_only=True)
@@ -64,9 +65,11 @@ class PromotedProductSerializer(serializers.ModelSerializer):
         # ✅ Always use frontend domain
         base_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
 
-        # ✅ Match your frontend route
-        return f"{base_url}/products/{product.slug}/?variant={variant.variant_name}&ref={obj.promoter.referral_code}"
-   
+        # ✅ URL-encode the variant name
+        variant_encoded = quote(variant.variant_name)
+
+        return f"{base_url}/products/{product.slug}/?variant={variant_encoded}&ref={obj.promoter.referral_code}"
+
     
 
 class PromoterSerializer(serializers.ModelSerializer):
@@ -74,11 +77,10 @@ class PromoterSerializer(serializers.ModelSerializer):
     promoted_products=PromotedProductSerializer(many=True,read_only=True)
     promoter_type = serializers.ChoiceField(
         choices=[('unpaid', 'Unpaid'), ('paid', 'Paid')],
-        default='unpaid',
-        required=False
+        required=True
     )
 
-    phone_number = serializers.CharField(source="user.phone_number", required=True)
+    phone_number = serializers.CharField(source="user.phone_number", required=False)
     
     bank_account_number = serializers.CharField(
         validators=[RegexValidator(regex=r'^\d{9,18}$', message="Bank account number must be 9–18 digits")]
@@ -93,13 +95,14 @@ class PromoterSerializer(serializers.ModelSerializer):
         validators=[RegexValidator(regex=r'^[A-Za-z .]+$', message="Account holder name should contain only letters, spaces, and dots.")]
     )
     profile_image=serializers.SerializerMethodField()
+    referral_link=serializers.SerializerMethodField()
 
     class Meta:
         model = Promoter
         fields = '__all__'
         read_only_fields = [
             'user', 'referral_code', 'total_sales_count', 'total_commission_earned',
-            'wallet_balance', 'is_eligible_for_withdrawal', 'premium_activated_at'
+            'wallet_balance', 'is_eligible_for_withdrawal', 'premium_activated_at','referral_link'
         ]
     def get_profile_image(self,obj):
         user=obj.user
@@ -111,13 +114,30 @@ class PromoterSerializer(serializers.ModelSerializer):
     
     def update(self, instance, validated_data):
         # Update phone number on the User model
-        user_data = validated_data.pop('user', {})
-        phone = user_data.get('phone_number')
-        if phone:
-            instance.user.phone_number = phone
-            instance.user.save(update_fields=['phone_number'])
+        user_data = validated_data.pop('user', None)
+        if user_data:
+            phone = getattr(user_data,'phone_number',None)
+            if phone:
+                validated_data['phone_number'] = phone # save Promoter's phone
+                instance.user.phone_number = phone
+                instance.user.save(update_fields=['phone_number'])
+        # Continue with the rest of the update
         return super().update(instance, validated_data)
     
+    def create(self, validated_data):
+        # Pop 'user' if it exists in validated_data to avoid duplicate passing
+        user = validated_data.pop('user', None) or self.context['request'].user
+
+        # Assign phone if available
+        phone = getattr(user, 'phone_number', None)
+        if phone:
+            validated_data['phone_number'] = phone
+
+        # Create promoter
+        promoter = Promoter.objects.create(user=user, **validated_data)
+        return promoter
+
+
     def validate_phone_number(self, value):
         qs = Promoter.objects.exclude(pk=getattr(self.instance, "pk", None))
         if qs.filter(phone_number=value).exists():
@@ -128,25 +148,15 @@ class PromoterSerializer(serializers.ModelSerializer):
         user=self.context['request'].user
         if Promoter.objects.filter(user=user).exists() and not getattr(self.instance,'id',None):
             raise serializers.ValidationError({'non_field_errors':'you are already registered as a promoter'})
-        promoter_type = attrs.get('promoter_type', getattr(self.instance, 'promoter_type', 'unpaid'))
-        if promoter_type == 'paid':
-            required_fields = ['bank_account_number', 'ifsc_code', 'bank_name', 'account_holder_name']
-            missing_fields = {field: "This field is required for paid promoters." for field in required_fields if not attrs.get(field)}
-            if missing_fields:
-                raise serializers.ValidationError(missing_fields)
         return attrs
 
     def get_referral_link(self, obj):
-        # Ensure obj is a single instance
         if hasattr(obj, 'referral_code'):
-            request = self.context.get('request')
             base_url = getattr(settings, 'FRONTEND_URL', None)
-            if request:
-                return request.build_absolute_uri(f"/register/?ref={obj.referral_code}")
-            elif base_url:
-                return f"{base_url}/register/?ref={obj.referral_code}"
+            if base_url:
+                return f"{base_url}/become-a-promoter/?ref={obj.referral_code}"
             else:
-                return f"/register/?ref={obj.referral_code}"
+                return f"/become-a-promoter/?ref={obj.referral_code}"
         return None
 
 
@@ -159,6 +169,7 @@ class PromoterSerializer(serializers.ModelSerializer):
                 "promoter_type": obj.referred_by.promoter_type
             }
         return None
+    
     
 class PromotedProductLightSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product_variant.product.name', read_only=True)

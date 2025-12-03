@@ -21,7 +21,7 @@ from .views import (
                    
                     DelhiveryWebhookAPIView,
                     )
-from orders.returnReplacement import ReturnRequestUpdateAPIView,ReplacementRequestUpdateAPIView
+from orders.returnReplacement import ReturnRequestUpdateAPIView,ReplacementRequestUpdateAPIView,ReturnRequestDetailAPIView,ReturnRequestRefundAPIView
 
 urlpatterns = [
     path("dashboard-stats/", AdminDashboardStatsAPIView.as_view(), name="admin-dashboard-stats"),
@@ -38,9 +38,9 @@ urlpatterns = [
     path("admin/orders/<str:order_number>/", AdminOrderDetailAPIView.as_view(), name="admin-order-detail"),
 
     path("admin/returns/", AdminReturnRequestListAPIView.as_view(), name="admin-return-list"),
-    path("admin/returns/<int:pk>/", AdminReturnRequestdetailAPIView.as_view(), name="admin-return-detail"),
-    path("admin/returns/<int:pk>/update/", ReturnRequestUpdateAPIView.as_view(), name="admin-return-update"),
-
+    path("admin/returns/<int:returnId>/", ReturnRequestDetailAPIView.as_view(), name="admin-return-detail"),
+    path("admin/returns/<int:returnId>/update/", ReturnRequestUpdateAPIView.as_view(), name="admin-return-update"),
+    path('admin/returns/<int:return_id>/process_refund/', ReturnRequestRefundAPIView.as_view(), name='return-refund'),
     path("admin/replacements/", AdminReplacementRequestListAPIView.as_view(), name="admin-return-list"),
     path("admin/replacements/<int:pk>/", AdminReplacementRequestdetailAPIView.as_view(), name="admin-return-detail"),
     path("admin/replacements/<int:pk>/update/", ReplacementRequestUpdateAPIView.as_view(), name="admin-return-update"),

@@ -20,6 +20,8 @@ const AdminAllBanner = () => {
       const res = await axiosInstance.get("admin/banners/", { params });
       setBanners(res.data.results || []);
     } catch (err) {
+      console.log(error);
+      
       toast.error(err.response?.data?.detail || "Failed to load banners");
     } finally {
       setLoading(false);

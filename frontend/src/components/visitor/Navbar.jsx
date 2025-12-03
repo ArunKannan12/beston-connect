@@ -145,41 +145,13 @@ const Navbar = () => {
                       )}
 
                       {/* Already a promoter */}
-                      {user.roles?.includes('promoter') && (
-                        <>
-                          {user.active_role !== 'promoter' ? (
-                            <button
-                              onClick={() => handleRoleSwitch('promoter', '/promoter/dashboard')}
-                              className="block w-full text-left px-4 py-2 hover:bg-gray-100"
-                            >
-                              Switch to Promoter
-                            </button>
-                          ) : (
-                            <>
-                              {/* Promoter mode active → show dashboard options */}
-                              <Link
-                                to="/promoter/dashboard/unpaid"
-                                className="block px-4 py-2 hover:bg-gray-100"
-                                onClick={() => setAccountOpen(false)}
-                              >
-                                Unpaid Dashboard
-                              </Link>
-                              <Link
-                                to="/promoter/dashboard/paid"
-                                className="block px-4 py-2 hover:bg-gray-100"
-                                onClick={() => setAccountOpen(false)}
-                              >
-                                Paid Dashboard
-                              </Link>
-                              <button
-                                onClick={() => handleRoleSwitch('customer', '/')}
-                                className="block w-full text-left px-4 py-2 hover:bg-gray-100"
-                              >
-                                Switch to Customer
-                              </button>
-                            </>
-                          )}
-                        </>
+                      {user.roles?.includes('promoter') && user.active_role !== 'promoter' && (
+                        <button
+                          onClick={() => handleRoleSwitch('promoter', '/promoter/dashboard')}
+                          className="block w-full text-left px-4 py-2 hover:bg-gray-100"
+                        >
+                          Switch to Promoter
+                        </button>
                       )}
                     </>
                   )}

@@ -47,6 +47,8 @@ const BannerFormModal = ({ banner = {}, onClose, refreshBanners, isCreateMode = 
       refreshBanners();
       onClose();
     } catch (err) {
+      console.log(err);
+      
       toast.error(err.response?.data?.detail || "Failed to save banner");
     } finally {
       setLoading(false);

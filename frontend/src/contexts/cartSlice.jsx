@@ -8,6 +8,8 @@ const axiosBaseQuery =
       const result = await axiosInstance({ url: baseUrl + url, method, data, params });
       return { data: result.data };
     } catch (axiosError) {
+      console.log(axiosError);
+      
       return {
         error: {
           status: axiosError.response?.status,
@@ -28,13 +30,17 @@ export const cartSlice = createApi({
       providesTags: ["Cart"],
     }),
     addToCart: builder.mutation({
-        query: ({ product_variant, quantity }) => ({
+        query: ({ product_variant_id, quantity, referral_code }) => ({
           url: "cart/",
           method: "POST",
-          data: { product_variant, quantity },  // ✅ Correct field name
+          data: { 
+            product_variant_id, 
+            quantity, 
+            ...(referral_code ? { referral_code } : {}) // only send if exists
+          },
         }),
         invalidatesTags: ["Cart"],
-      }),
+    }),
     updateCartItem: builder.mutation({
       query: ({ id, quantity }) => ({
         url: `cart/${id}/`,

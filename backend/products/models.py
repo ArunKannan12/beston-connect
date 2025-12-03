@@ -91,7 +91,10 @@ class ProductVariant(models.Model):
     allow_replacement = models.BooleanField(default=False)
     replacement_days = models.PositiveIntegerField(null=True, blank=True)
     featured = models.BooleanField(default=False)
-    weight=models.FloatField(default=0.5)
+    weight = models.FloatField(
+        default=0.5,
+        help_text="Enter weight in kilograms (e.g., 0.2 for 200g, 2 for 2kg)"
+    )
     promoter_commission_rate = models.FloatField(
         default=0.0,
         help_text="Fixed commission % for promoters on this product"
@@ -112,7 +115,19 @@ class ProductVariant(models.Model):
     @property
     def final_price(self):
         return self.offer_price if self.offer_price else self.base_price
-
+    
+    def get_weight_in_grams(self):
+        """
+        Returns weight in grams for API integration (Delhivery expects grams).
+        If weight is missing or invalid, defaults to 200g.
+        """
+        try:
+            if self.weight and self.weight > 0:
+                return round(self.weight * 1000)
+            return 200  # Default minimum weight in grams
+        except Exception:
+            return 200
+        
     def __str__(self):
         return f"{self.product.name} - {self.variant_name}"
 

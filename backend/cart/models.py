@@ -23,7 +23,7 @@ class CartItem(models.Model):
     product_variant = models.ForeignKey(ProductVariant, on_delete=models.SET_NULL, null=True)
     quantity = models.PositiveIntegerField(default=1)
     added_at = models.DateTimeField(auto_now_add=True)
-
+    referral_code = models.CharField(max_length=20, blank=True, null=True)
     class Meta:
         unique_together = ('cart', 'product_variant')
 

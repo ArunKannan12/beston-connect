@@ -9,18 +9,21 @@ import OrderItemsList from "./orderDetail/OrderItemsList";
 import OrderSummary from "./orderDetail/OrderSummary";
 import ShippingInfo from "./orderDetail/ShippingInfo";
 
+
 const OrderDetail = () => {
   const { order_number } = useParams();
   const navigate = useNavigate();
   const [order, setOrder] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [cancelLoading,setCancelLoading] = useState(false)
-  const [paying, setPaying] = useState(false);
-  const [showCancelModal,setShowCancelModal] = useState(false);
+  const [cancelLoading, setCancelLoading] = useState(false);
+  const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
 
   const { isAuthenticated, loading: authLoading } = useAuth();
 
+  /** ----------------------------
+   *  FETCH ORDER DETAILS
+   * ---------------------------- */
   useEffect(() => {
     if (authLoading) return;
     if (!isAuthenticated) {
@@ -43,87 +46,37 @@ const OrderDetail = () => {
     }
   };
 
-  const handlePayNow = async () => {
-  if (!window.Razorpay) {
-    toast.error("Payment gateway not loaded. Please try again.");
-    return;
-  }
-
-  setPaying(true);
-  try {
-    const res = await axiosInstance.post(`/orders/${order.order_number}/pay/`, {
-      payment_method: "Razorpay",
-    });
-
-    const { order: orderData } = res.data;
-
-    if (orderData.payment_method === "Cash on Delivery") {
-      toast.success("Order confirmed with COD");
-      fetchOrder();
+  /** ----------------------------
+   *  CANCEL ORDER
+   * ---------------------------- */
+  const handleCancel = async () => {
+    if (!cancelReason.trim()) {
+      toast.error("Please provide a reason for cancellation.");
       return;
     }
 
-    if (orderData.payment_method === "Razorpay" && !orderData.is_paid) {
-      const options = {
-        key: res.data.razorpay_key, // from backend
-        amount: res.data.amount, // from backend
-        currency: res.data.currency, // from backend
-        name: "Beston Connect",
-        description: "Order Payment",
-        order_id: res.data.razorpay_order_id, // razorpay order id from backend
-        handler: async function (response) {
-          try {
-            await axiosInstance.post(`/orders/razorpay/verify/`, {
-              order_number: orderData.order_number,
-              ...response,
-            });
-            toast.success("Payment successful");
-            fetchOrder();
-          } catch (err) {
-            toast.error("Payment verification failed");
-          }
-        },
-        prefill: {
-          name: orderData.shipping_address.full_name,
-          email: orderData.user?.email,
-          contact: orderData.shipping_address.phone_number,
-        },
-        theme: { color: "#3399cc" },
-      };
-
-      new window.Razorpay(options).open();
-    }
-  } catch (err) {
-    console.log(err);
-    toast.error(err.response?.data?.detail || "Payment failed");
-  } finally {
-    setPaying(false);
-  }
-};
-
-
-
-  const handleCancel = async () => {
-    if (!cancelReason.trim()) {
-    toast.error("Please provide a reason for cancellation.");
-    return;
-  }
-   setCancelLoading(true)
+    setCancelLoading(true);
     try {
-      await axiosInstance.post(`/orders/${order.order_number}/cancel/`,{cancel_reason:cancelReason});
+      await axiosInstance.post(`/orders/${order.order_number}/cancel/`, {
+        cancel_reason: cancelReason,
+      });
       toast.success("Order cancelled successfully");
       fetchOrder();
     } catch (err) {
       toast.error(err.response?.data?.detail || "Failed to cancel order");
-    }finally{
-      setShowCancelModal(false)
-      setCancelLoading(false)
-      setCancelReason('')
+    } finally {
+      setShowCancelModal(false);
+      setCancelLoading(false);
+      setCancelReason("");
     }
   };
 
+  /** ----------------------------
+   *  RENDER
+   * ---------------------------- */
   if (loading || authLoading) return <OrderDetailShimmer />;
-  if (!order) return <p className="p-6 text-center text-gray-500">Order not found.</p>;
+  if (!order)
+    return <p className="p-6 text-center text-gray-500">Order not found.</p>;
 
   return (
     <div className="w-full bg-gray-50 min-h-screen">
@@ -146,39 +99,41 @@ const OrderDetail = () => {
             Back to Orders
           </button>
           <span className="text-gray-400">/</span>
-          <span className="font-semibold text-gray-800">Order #{order.order_number}</span>
+          <span className="font-semibold text-gray-800">
+            Order #{order.order_number}
+          </span>
         </div>
 
         {/* Shipping Info */}
-        <ShippingInfo address={order.shipping_address} orderNumber={order.id}/>
+        <ShippingInfo address={order.shipping_address} orderNumber={order.id} />
 
         {/* Order Items */}
-        <OrderItemsList items={order.items}  orderNumber={order.order_number} orders={order}/>
+        <OrderItemsList
+          items={order.items}
+          orderNumber={order.order_number}
+          orders={order}
+        />
 
         {/* Order Summary */}
-        <OrderSummary 
-        order={order} 
-        fetchOrder={fetchOrder} 
-        cancelLoading={cancelLoading}
-        onTriggerCancelModal={()=>setShowCancelModal(true)} 
-        onPayNow={handlePayNow}
-        paying={paying}
+        <OrderSummary
+          order={order}
+          fetchOrder={fetchOrder}
+          cancelLoading={cancelLoading}
+          onTriggerCancelModal={() => setShowCancelModal(true)}
         />
-       
 
-        {/* Order Tracker */}
+        {/* Common Order Tracker */}
         <div className="bg-white/60 backdrop-blur-md rounded-xl shadow-md border border-gray-200 p-6">
-    
           <OrderTracker
             status={order.status}
             paymentMethod={order.payment_method}
             timestamps={{
               pending: order.created_at,
               processing: order.paid_at,
-              packed: order.items[0]?.packed_at,
-              shipped: order.items[0]?.shipped_at,
-              out_for_delivery: order.items[0]?.out_for_delivery_at,
-              delivered: order.items[0]?.delivered_at,
+              packed: order.packed_at,
+              shipped: order.shipped_at,
+              out_for_delivery: order.out_for_delivery_at,
+              delivered: order.delivered_at,
               cancelled: order.cancelled_at,
               refunded: order.refunded_at,
             }}
@@ -191,7 +146,8 @@ const OrderDetail = () => {
             }
           />
         </div>
-
+         
+        {/* Cancel Modal */}
         {showCancelModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
             <div className="bg-white/70 backdrop-blur-md border border-gray-200 rounded-2xl shadow-xl p-6 max-w-sm w-full animate-fadeIn scale-95 transition-all duration-300">
@@ -199,10 +155,14 @@ const OrderDetail = () => {
                 <div className="w-10 h-10 bg-red-100 text-red-600 rounded-full flex items-center justify-center text-xl">
                   ❗
                 </div>
-                <h3 className="text-lg font-bold text-gray-900">Confirm Cancellation</h3>
+                <h3 className="text-lg font-bold text-gray-900">
+                  Confirm Cancellation
+                </h3>
               </div>
+
               <p className="text-sm text-gray-700 mb-4 leading-relaxed">
-                Are you sure you want to cancel this order? This action cannot be undone and may affect your delivery timeline.
+                Are you sure you want to cancel this order? This action cannot be undone
+                and may affect your delivery timeline.
               </p>
 
               <textarea

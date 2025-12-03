@@ -65,7 +65,7 @@ const LoginAndSignup = () => {
     try {
       setLoading(true);
       const redirectFrom = location.state?.from || "/";
-      const res = await login(loginData, null, redirectFrom);
+      const res = await login(loginData, null, redirectFrom,navigate);
 
       if (res.success) {
         toast.success("Login successful");

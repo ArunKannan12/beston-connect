@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Return Delivered (Warehouse)</title>
+  <style>
+    body { font-family: Arial, sans-serif; background-color: #f4f4f6; color: #333; margin:0; padding:0; }
+    .container { max-width: 600px; margin: 30px auto; background: #fff; padding: 25px; border-radius: 8px; }
+    .header { background: #2196F3; color: #fff; text-align: center; padding: 15px; border-radius: 8px 8px 0 0; }
+    .body { padding: 20px; line-height: 1.6; }
+    .section { background: #f9f9f9; padding: 12px; border-radius: 6px; margin-bottom: 15px; }
+    .footer { font-size: 12px; text-align: center; color: #999; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h2>Return Received at Warehouse</h2>
+    </div>
+    <div class="body">
+      <p>Hello Warehouse Team,</p>
+      <p>Return request <strong>#{{ notification.order.id }}</strong> for order <strong>{{ notification.order.order_number }}</strong> has been delivered to the warehouse.</p>
+
+      <div class="section">
+        <p><strong>Order Number:</strong> {{ notification.order.order_number }}</p>
+        <p><strong>Return ID:</strong> {{ notification.id }}</p>
+        <p><strong>Customer:</strong> {{ notification.order.user.get_full_name }} ({{ notification.order.user.email }})</p>
+        <p><strong>Received At:</strong> {{ notification.sent_at|default:"Just now" }}</p>
+      </div>
+
+      <p>Please verify the returned items and update the system accordingly.</p>
+    </div>
+    <div class="footer">
+      This is an automated message from YourShop.
+    </div>
+  </div>
+</body>
+</html>

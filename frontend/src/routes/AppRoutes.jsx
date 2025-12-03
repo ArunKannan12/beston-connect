@@ -99,10 +99,9 @@ export const router = createBrowserRouter([
       { path: "verify-email", element: withSuspense(<VerifyEmail />) },
       { path: "auth/facebook", element: withSuspense(<FacebookAuth />) },
       { path: "auth/google", element: withSuspense(<GoogleAuth />) },
-      {path:"become-a-promoter",element:withSuspense(<PromoterPage/>)}
     ],
   },
-
+  
   // Customer routes
   {
     element: <ProtectedRoutes allowedRoles={["customer"]} />,
@@ -120,6 +119,7 @@ export const router = createBrowserRouter([
           { path: "/returns/create/:orderNumber", element: withSuspense(<ReturnRequest />) },
           { path: "/returns/:returnId", element: withSuspense(<ReturnRequest />) },
           { path: "/replacements/create/:orderNumber", element: withSuspense(<ReplacementRequest />) },
+          {path:"become-a-promoter",element:withSuspense(<PromoterPage/>)}
         ],
       },
     ],

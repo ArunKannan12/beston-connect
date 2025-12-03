@@ -1,11 +1,12 @@
 import axiosInstance from "../api/axiosinstance";
 import { toast } from "react-toastify";
 
-// Load Razorpay SDK dynamically
+/* ------------------------------
+ * Load Razorpay dynamically
+ * ------------------------------ */
 const loadRazorpayScript = () =>
   new Promise((resolve, reject) => {
     if (window.Razorpay) return resolve(true);
-
     const script = document.createElement("script");
     script.src = "https://checkout.razorpay.com/v1/checkout.js";
     script.onload = () => resolve(true);
@@ -13,6 +14,24 @@ const loadRazorpayScript = () =>
     document.body.appendChild(script);
   });
 
+/* ------------------------------
+ * Cleanup helper
+ * ------------------------------ */
+const cleanupRazorpaySession = () => {
+  try {
+    const scripts = document.querySelectorAll(
+      'script[src*="checkout.razorpay.com"]'
+    );
+    scripts.forEach((s) => s.parentNode?.removeChild(s));
+    if (window.Razorpay) delete window.Razorpay;
+  } catch (err) {
+    console.warn("Failed to clean Razorpay session:", err);
+  }
+};
+
+/* ------------------------------
+ * Main payment handler (SAFE)
+ * ------------------------------ */
 export const handleRazorpayPayment = async ({
   razorpay_order_id,
   amount,
@@ -20,54 +39,72 @@ export const handleRazorpayPayment = async ({
   razorpay_key,
   orderNumber,
   onSuccess,
+  onOpen,
+  onClose,
 }) => {
   try {
     await loadRazorpayScript();
-
     if (!razorpay_order_id) throw new Error("Razorpay order ID is required");
 
     return new Promise((resolve, reject) => {
       const options = {
         key: razorpay_key,
-        amount:Math.round(amount),
+        amount: Math.round(amount),
         currency,
         name: "Beston Connect",
         description: `Payment for order ${orderNumber}`,
         order_id: razorpay_order_id,
+
         handler: async (response) => {
           try {
             const payload = {
               razorpay_order_id,
               razorpay_payment_id: response.razorpay_payment_id,
               razorpay_signature: response.razorpay_signature,
-              order_number: orderNumber, // backend expects order_number
+              order_number: orderNumber,
             };
 
             await axiosInstance.post("orders/razorpay/verify/", payload);
-            toast.success("Payment successful & verified");
-            if (onSuccess) onSuccess(orderNumber);
+
+            toast.success("Payment successful & verified ✅");
+
+            cleanupRazorpaySession();
+            onSuccess?.(orderNumber);
+            onClose?.();
             resolve(orderNumber);
           } catch (error) {
-            console.error(error);
-            toast.error(error.response?.data?.detail || "Payment verification failed");
+            toast.error(
+              error.response?.data?.detail || "Payment verification failed ❌"
+            );
+            cleanupRazorpaySession();
+            onClose?.();
             reject(error);
           }
         },
+
         modal: {
           ondismiss: () => {
-            toast.info("Payment was cancelled");
+            toast.info("Payment was cancelled 🕓");
+            cleanupRazorpaySession();
+            onClose?.();
             reject(new Error("Payment cancelled"));
           },
         },
+
         theme: { color: "#3399cc" },
       };
 
       const rzp = new window.Razorpay(options);
+
+      // UI lock hook
+      onOpen?.();
+
       rzp.open();
     });
   } catch (err) {
-    console.error(err);
     toast.error(err.message || "Failed to initiate Razorpay payment");
+    cleanupRazorpaySession();
+    onClose?.();
     throw err;
   }
 };

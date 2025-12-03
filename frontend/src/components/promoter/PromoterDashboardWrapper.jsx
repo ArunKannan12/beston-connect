@@ -16,8 +16,7 @@ const PromoterDashboardWrapper = () => {
         if(!isMounted) return;
 
         const promoterType = res.data.promoter_profile?.promoter_type; // "paid" or "unpaid"
-        console.log(res.data,'data');
-        
+    
         if (promoterType === "paid") {
           navigate("/promoter/dashboard/paid", { replace: true });
         } else if (promoterType === "unpaid") {

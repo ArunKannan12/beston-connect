@@ -150,13 +150,16 @@ class ProductVariantAdminSerializer(serializers.ModelSerializer):
     return_days = serializers.IntegerField(required=False, allow_null=True)
     allow_replacement = serializers.BooleanField(required=False)
     replacement_days = serializers.IntegerField(required=False, allow_null=True)
+    weight = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True)
+    promoter_commission_rate = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, allow_null=True)
 
     class Meta:
         model = ProductVariant
         fields = [
             "id", "variant_name", "base_price", "offer_price", "stock", "featured",
             "sku", "description", "images", "primary_image_url", "remove_images", "existing_images",
-            "allow_return", "return_days", "allow_replacement", "replacement_days"  # ✅ Added
+            "allow_return", "return_days", "allow_replacement", "replacement_days", "weight",  # <-- add this
+            "promoter_commission_rate",  # ✅ Added
         ]
 
     def validate(self, attrs):
@@ -181,8 +184,12 @@ class ProductVariantAdminSerializer(serializers.ModelSerializer):
         validated_data["sku"] = validated_data.get("sku") or self.generate_sku(product.name)
 
         # Create the variant
-        variant = ProductVariant.objects.create(product=product, **validated_data)
-
+        variant = ProductVariant.objects.create(
+            product=product,
+            weight=validated_data.get("weight", ""),
+            promoter_commission_rate=validated_data.get("promoter_commission_rate", ""),
+            **validated_data
+        )
         # Add all images
         all_images = existing_images + images_data
         for img_data in all_images:
@@ -203,9 +210,13 @@ class ProductVariantAdminSerializer(serializers.ModelSerializer):
         if remove_images:
             instance.images.filter(id__in=remove_images).delete()
 
-        # Update fields
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
+        for attr in [
+            "variant_name", "base_price", "offer_price", "stock", "featured",
+            "description", "allow_return", "return_days", "allow_replacement",
+            "replacement_days", "weight", "promoter_commission_rate"
+        ]:
+            if attr in validated_data:
+                setattr(instance, attr, validated_data[attr])
         instance.save()
 
         # Merge image data
@@ -426,15 +437,19 @@ class CustomerSerializer(serializers.ModelSerializer):
 
 
 class AdminOrderItemSerializer(serializers.ModelSerializer):
-    # Read-only nested product info
+    # Nested product info (read-only)
     product_variant = ProductVariantSerializer(read_only=True)
 
-    # Write-only IDs for creation/updating
+    # Optional: dynamically show if return or replacement exists
+    return_request = serializers.SerializerMethodField()
+    replacement_request = serializers.SerializerMethodField()
+
+    # Write-only IDs (for creation/updating if needed)
     order_id = serializers.PrimaryKeyRelatedField(
-        queryset=Order.objects.all(), write_only=True, source='order'
+        queryset=Order.objects.all(), write_only=True, source='order', required=False
     )
     product_variant_id = serializers.PrimaryKeyRelatedField(
-        queryset=ProductVariant.objects.all(), write_only=True, source='product_variant'
+        queryset=ProductVariant.objects.all(), write_only=True, source='product_variant', required=False
     )
 
     class Meta:
@@ -447,12 +462,32 @@ class AdminOrderItemSerializer(serializers.ModelSerializer):
             'quantity',
             'price',
             'status',
+            'return_request',
+            'replacement_request',
         ]
 
+    def get_return_request(self, obj):
+        if hasattr(obj, 'return_request') and obj.return_request:
+            return {
+                'id': obj.return_request.id,
+                'status': obj.return_request.status,
+                'created_at': obj.return_request.created_at
+            }
+        return None
+
+    def get_replacement_request(self, obj):
+        if hasattr(obj, 'replacement_request') and obj.replacement_request:
+            return {
+                'id': obj.replacement_request.id,
+                'status': obj.replacement_request.status,
+                'created_at': obj.replacement_request.created_at
+            }
+        return None
+
     def validate_quantity(self, value):
-        product_variant = self.initial_data.get('product_variant_id')
-        if product_variant:
-            variant = ProductVariant.objects.filter(id=product_variant).first()
+        product_variant_id = self.initial_data.get('product_variant_id')
+        if product_variant_id:
+            variant = ProductVariant.objects.filter(id=product_variant_id).first()
             if variant and value > variant.stock:
                 raise serializers.ValidationError("Quantity exceeds available stock.")
         if value <= 0:
@@ -462,25 +497,32 @@ class AdminOrderItemSerializer(serializers.ModelSerializer):
     def validate_price(self, value):
         if value <= 0:
             raise serializers.ValidationError("Price must be greater than zero.")
-        return value 
+        return value
 
 
 class AdminOrderSerializer(serializers.ModelSerializer):
     shipping_address = ShippingAddressSerializer(read_only=True)
-    items = AdminOrderItemSerializer(many=True, source='orderitem_set', read_only=True)
+    items = AdminOrderItemSerializer(many=True, read_only=True)
     user = serializers.StringRelatedField(read_only=True)
+
+    refund_status = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
-        fields = [
-            'id', 'order_number', 'user', 'shipping_address', 'status',
-            'subtotal', 'total', 'payment_method', 'is_paid', 'is_refunded',
-            'tracking_number', 'paid_at', 'created_at', 'updated_at',
-            'promoter', 'cancel_reason', 'cancelled_at', 'cancelled_by',
-            'cancelled_by_role', 'razorpay_order_id', 'razorpay_payment_id',
-            'refund_id', 'refund_status', 'refunded_at', 'is_restocked', 'items'
+        fields = ['id','order_number','user','shipping_address','status','subtotal',
+                  'delivery_charge','total_commission','total','payment_method','is_paid',
+                  'paid_at','razorpay_order_id','razorpay_payment_id','has_refund',
+                  'refund_status','promoter','cancel_reason','cancelled_at','cancelled_by','cancelled_by_role','is_restocked','courier','waybill','tracking_url','label_url','label_generated_at','shipped_at','handoff_timestamp','delivered_at','checkout_session_id','items','created_at','updated_at',
         ]
-        read_only_fields = fields # Admin list is mostly read-only
+        read_only_fields = fields
+
+    def get_refund_status(self, obj):
+        # Return status of latest approved return request if exists
+        latest_return = getattr(obj, 'return_requests', None)
+        if latest_return:
+            latest = obj.return_requests.order_by('-created_at').first()
+            return latest.status if latest else None
+        return None
 
 class AdminLogSerializer(serializers.ModelSerializer):
     order_item = serializers.SerializerMethodField()

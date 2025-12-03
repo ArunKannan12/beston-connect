@@ -83,22 +83,24 @@ class Notification(models.Model):
     # -----------------------
     # Sending email
     # -----------------------
-    def send_notification(self):
+    def send_notification(self, template_name="emails/notification.html"):
         try:
-            self._send_email()
+            self._send_email(template_name=template_name)
             self.mark_sent()
         except Exception as e:
             self.mark_failed()
             print(f"Failed to send notification {self.id}: {e}")
 
-    def _send_email(self):
+
+    def _send_email(self, template_name="emails/notification.html"):
         subject = NOTIFICATION_TITLES.get(self.event, "Notification")
         from_email = settings.DEFAULT_FROM_EMAIL
         to_email = [self.user.email]
 
-        html_content = render_to_string("emails/notification.html", {"notification": self})
-        text_content = self.message
+        html_content = render_to_string(template_name, {"notification": self})
+        text_content = self.message or f"You have a new notification: {self.event}"
 
         email = EmailMultiAlternatives(subject, text_content, from_email, to_email)
         email.attach_alternative(html_content, "text/html")
         email.send(fail_silently=False)
+

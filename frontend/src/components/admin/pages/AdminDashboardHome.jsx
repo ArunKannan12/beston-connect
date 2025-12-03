@@ -4,13 +4,13 @@ import {
   ResponsiveContainer,
   AreaChart,
   Area,
-  Legend,
   XAxis,
   YAxis,
   Tooltip,
   PieChart,
   Pie,
   Cell,
+  Legend,
 } from "recharts";
 import { motion } from "framer-motion";
 import { toast } from "react-toastify";
@@ -26,7 +26,6 @@ const AdminDashboardHome = () => {
       try {
         const res = await axiosInstance.get("dashboard-stats/");
         setStats(res.data);
-        console.log(res.data);
       } catch (error) {
         const errMsg = error.response?.data?.detail || "Failed to load stats";
         toast.error(errMsg);
@@ -39,51 +38,14 @@ const AdminDashboardHome = () => {
 
   return (
     <div className="space-y-8 p-6 bg-gray-50 min-h-screen">
-      {/* 1. Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-6">
+      {/* Summary Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
         {[
-          {
-            label: "Total Orders",
-            value: stats.total_orders,
-            icon: "📦",
-            color: "from-blue-500 to-indigo-600",
-          },
-          {
-            label: "Total Sales",
-            value: `₹${stats.total_sales}`,
-            icon: "💰",
-            color: "from-green-500 to-emerald-600",
-          },
-          {
-            label: "Products",
-            value: stats.total_products,
-            icon: "🛍️",
-            color: "from-purple-500 to-pink-600",
-          },
-          {
-            label: "Customers",
-            value: stats.total_customers,
-            icon: "👥",
-            color: "from-orange-500 to-yellow-500",
-          },
-          {
-            label: "Pending Orders",
-            value: stats.pending_orders,
-            icon: "⏳",
-            color: "from-red-500 to-rose-600",
-          },
-          {
-            label: "Deliverymen",
-            value: stats.total_deliveryman,
-            icon: "🚚",
-            color: "from-teal-500 to-cyan-600",
-          },
-          {
-            label: "Warehouse Staff",
-            value: stats.total_warehousestaff,
-            icon: "🏭",
-            color: "from-pink-500 to-rose-600",
-          },
+          { label: "Total Orders", value: stats.total_orders, icon: "📦", color: "from-blue-500 to-indigo-600" },
+          { label: "Total Sales", value: `₹${stats.total_sales}`, icon: "💰", color: "from-green-500 to-emerald-600" },
+          { label: "Products", value: stats.total_products, icon: "🛍️", color: "from-purple-500 to-pink-600" },
+          { label: "Customers", value: stats.total_customers, icon: "👥", color: "from-orange-500 to-yellow-500" },
+          { label: "Pending Orders", value: stats.pending_orders, icon: "⏳", color: "from-red-500 to-rose-600" },
         ].map((card, i) => (
           <motion.div
             key={i}
@@ -95,14 +57,13 @@ const AdminDashboardHome = () => {
             <div className="text-3xl mb-2">{card.icon}</div>
             <p className="text-sm opacity-80">{card.label}</p>
             <p className="text-2xl font-bold">{card.value}</p>
-            <p className="text-xs mt-1 opacity-70">+12% vs last month</p>
           </motion.div>
         ))}
       </div>
 
-      {/* 2. Charts */}
+      {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Sales Line Chart */}
+        {/* Monthly Sales */}
         <div className="p-6 bg-white rounded-2xl shadow">
           <h3 className="mb-4 font-semibold text-gray-800">Monthly Sales</h3>
           <ResponsiveContainer width="100%" height={300}>
@@ -116,38 +77,26 @@ const AdminDashboardHome = () => {
               <XAxis dataKey="month" />
               <YAxis />
               <Tooltip />
-              <Area
-                type="monotone"
-                dataKey="total"
-                stroke="#4f46e5"
-                fill="url(#salesGradient)"
-              />
+              <Area type="monotone" dataKey="total" stroke="#4f46e5" fill="url(#salesGradient)" />
             </AreaChart>
           </ResponsiveContainer>
         </div>
 
-        {/* Orders by Status Donut */}
+        {/* Orders by Status */}
         <div className="p-6 bg-white rounded-2xl shadow">
-          <h3 className="mb-4 font-semibold text-gray-800">
-            Orders by Status
-          </h3>
+          <h3 className="mb-4 font-semibold text-gray-800">Orders by Status</h3>
           <ResponsiveContainer width="100%" height={300}>
             <PieChart>
               <Pie
-                data={Object.entries(stats.orders_by_status).map(
-                  ([key, value]) => ({ name: key, value })
-                )}
+                data={Object.entries(stats.orders_by_status).map(([name, value]) => ({ name, value }))}
                 cx="50%"
                 cy="50%"
                 innerRadius={60}
                 outerRadius={100}
                 dataKey="value"
               >
-                {Object.keys(stats.orders_by_status).map((_, index) => (
-                  <Cell
-                    key={index}
-                    fill={COLORS[index % COLORS.length]}
-                  />
+                {Object.keys(stats.orders_by_status).map((_, i) => (
+                  <Cell key={i} fill={COLORS[i % COLORS.length]} />
                 ))}
               </Pie>
               <Tooltip />
@@ -157,7 +106,7 @@ const AdminDashboardHome = () => {
         </div>
       </div>
 
-      {/* 3. Tables */}
+      {/* Top & Low Stock Products */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Top Products */}
         <div className="p-6 bg-white rounded-2xl shadow">
@@ -189,11 +138,9 @@ const AdminDashboardHome = () => {
           </div>
         </div>
 
-        {/* Low Stock */}
+        {/* Low Stock Products */}
         <div className="p-6 bg-white rounded-2xl shadow">
-          <h3 className="mb-4 font-semibold text-gray-800">
-            ⚠️ Low Stock Products
-          </h3>
+          <h3 className="mb-4 font-semibold text-gray-800">⚠️ Low Stock Products</h3>
           <div className="space-y-4">
             {stats.low_stock_products.map((p, i) => (
               <motion.div
@@ -204,27 +151,19 @@ const AdminDashboardHome = () => {
                 className="flex items-center justify-between p-4 rounded-xl border bg-white hover:bg-red-50 hover:shadow-md transition"
               >
                 <div>
-                  <p className="font-medium text-gray-800">
-                    {p.product__name}
-                  </p>
+                  <p className="font-medium text-gray-800">{p.product__name}</p>
                   <p className="text-xs text-gray-500">ID: {p.id}</p>
                 </div>
                 <div className="w-40">
                   <div className="flex justify-between text-xs mb-1">
                     <span>Stock</span>
-                    <span
-                      className={`font-bold ${
-                        p.stock < 10 ? "text-red-600" : "text-green-600"
-                      }`}
-                    >
+                    <span className={`font-bold ${p.stock < 10 ? "text-red-600" : "text-green-600"}`}>
                       {p.stock}
                     </span>
                   </div>
                   <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
                     <motion.div
-                      className={`h-2 rounded-full ${
-                        p.stock < 10 ? "bg-red-500" : "bg-green-500"
-                      }`}
+                      className={`h-2 rounded-full ${p.stock < 10 ? "bg-red-500" : "bg-green-500"}`}
                       initial={{ width: 0 }}
                       animate={{ width: `${Math.min(p.stock, 100)}%` }}
                       transition={{ duration: 0.8 }}

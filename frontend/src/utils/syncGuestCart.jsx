@@ -11,6 +11,7 @@ export const syncGuestcart = async (mergeGuestCart, itemsToMerge = null, refetch
   console.log("[SyncGuestCart] Starting cart sync...");
 
   let cartItems = itemsToMerge;
+  console.log(">> cartItems loaded:", cartItems);
 
   // Load from storage if not provided
   if (!cartItems) {
@@ -37,19 +38,21 @@ export const syncGuestcart = async (mergeGuestCart, itemsToMerge = null, refetch
     const formattedItems = cartItems.map((item) => ({
       product_variant_id: item.product_variant_id,
       quantity: item.quantity,
-      source: item.source || "add_to_cart", // fallback
+      source: item.source || "add_to_cart",
+      referral_code: item.referral_code || null, // fallback
     }));
 
     const payload = { items: formattedItems };
     
 
     const response = await mergeGuestCart(payload).unwrap();
-   
+    console.log(">> mergeGuestCart response:", response);
+
 
     // Clear storage
     localStorage.removeItem("cart");
     sessionStorage.removeItem("buyNowMinimal");
-    
+    sessionStorage.removeItem("referral_code");
 
     const { merged_items = [], skipped_items = [], failed_items = [] } = response;
 
@@ -57,11 +60,20 @@ export const syncGuestcart = async (mergeGuestCart, itemsToMerge = null, refetch
       toast.success(`${merged_items.length} item(s) added to your cart`);
       console.log("[SyncGuestCart] Merged items:", merged_items);
 
-      const allBuyNow = merged_items.every(item => item.source === "buy_now");
-      if (allBuyNow && navigate) {
+      console.log(">> Checking Buy Now Flow:");
+      cartItems.forEach((item, i) =>
+        console.log(`Item ${i}:`, item, "source =", item.source)
+      );
+      console.log("Every item buy_now?", cartItems.every(item => item.source === "buy_now"));
+      console.log(">> buyNowMinimal from session:", JSON.parse(sessionStorage.getItem("buyNowMinimal") || "[]"));
+
+      const isBuyNowFlow = cartItems.every(item => item.source === "buy_now");
+
+      if (isBuyNowFlow && navigate) {
         toast.info("Redirecting to checkout...");
         navigate("/checkout");
       }
+
     }
 
     if (skipped_items.length > 0 || failed_items.length > 0) {

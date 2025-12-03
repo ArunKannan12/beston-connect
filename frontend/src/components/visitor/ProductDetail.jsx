@@ -24,30 +24,62 @@ const ProductDetail = () => {
   const [addToCartMutation, { isLoading }] = useAddToCartMutation();
   const { refetch: refetchCart } = useGetCartQuery(undefined, { skip: !isAuthenticated });
 
-  // Fetch product & related products
-  useEffect(() => {
-    const fetchProduct = async () => {
-      setLoading(true);
-      try {
-        const res = await axiosInstance.get(`products/${productSlug}/`);
-        const data = res.data;
-        setProduct(data);
-       
-        
-        if (data.variants?.length > 0) setSelectedVariant(data.variants[0]);
+  
+  // 1️⃣ Fetch product & related products
+useEffect(() => {
+  const fetchProduct = async () => {
+    setLoading(true);
+    try {
+      const res = await axiosInstance.get(`products/${productSlug}/`);
+      const data = res.data;
+      setProduct(data);
 
-        const relatedRes = await axiosInstance.get(`products/${productSlug}/related/`);
-        setRelatedProducts(relatedRes.data.results || []);
-      } catch (error) {
-        console.error("Failed to load product", error);
-        toast.error("Product not found");
-        navigate("/store");
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchProduct();
-  }, [productSlug, navigate]);
+      const relatedRes = await axiosInstance.get(`products/${productSlug}/related/`);
+      setRelatedProducts(relatedRes.data.results || []);
+    } catch (error) {
+      console.error("Failed to load product", error);
+      toast.error("Product not found");
+      navigate("/store");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  fetchProduct();
+}, [productSlug, navigate]);
+
+// 2️⃣ Update selected variant whenever URL changes or product loads
+useEffect(() => {
+  if (!product) return;
+
+  const params = new URLSearchParams(location.search);
+  const variantName = params.get("variant");
+
+  // ---- Variant Selection Logic ----
+  if (variantName) {
+    const foundVariant = product.variants.find(
+      v => v.variant_name === decodeURIComponent(variantName)
+    );
+    setSelectedVariant(foundVariant || product.variants[0]);
+  } else if (product.variants?.length > 0) {
+    setSelectedVariant(product.variants[0]);
+  }
+
+  // ---- Call Promoter Click API ----
+  const referral_code = localStorage.getItem("referral_code");
+
+  // Wait until selectedVariant is set
+  if (referral_code && selectedVariant?.id) {
+    axiosInstance.post("/promoter/click/", {
+      referral_code,
+      promoter_product_id: selectedVariant.id,
+    })
+    .then(res => console.log("Click tracked"))
+    .catch(err => console.log("Click tracking failed", err));
+  }
+
+}, [product, location.search, selectedVariant]);
+
 
   // Quantity helpers
   const productQuantity = (task) => {
@@ -80,21 +112,40 @@ const ProductDetail = () => {
   
 
   // Guest cart helper (localStorage)
-  const addToLocalCart = (variantId, quantity) => {
+ const addToLocalCart = (variantId, quantity) => {
     const cart = JSON.parse(localStorage.getItem("cart")) || [];
+
+    // ❌ DO NOT use sessionStorage referral here  
+    //    Cart items should only take referral from URL when added
+    const params = new URLSearchParams(location.search);
+    const ref = params.get('ref');   // Only take from URL
+
     const index = cart.findIndex(item => item.product_variant_id === variantId);
 
-    if (index > -1) cart[index].quantity += quantity;
-    else cart.push({ product_variant_id: variantId, quantity, source: "add_to_cart" });
+    if (index > -1) {
+      cart[index].quantity += quantity;
+      if (ref) cart[index].referral_code = ref; // update only if URL has ref
+    } else {
+      cart.push({
+        product_variant_id: variantId,
+        quantity,
+        source: "add_to_cart",
+        referral_code: ref || null, // URL-only
+      });
+    }
 
     localStorage.setItem("cart", JSON.stringify(cart));
     window.dispatchEvent(new Event("cartUpdated"));
-    toast.success("Added to cart locally");
+    toast.success("Added to cart");
   };
+
 
   // Add to cart
   const addToCart = async (variantId) => {
     if (!variantId) return toast.error("No variant selected");
+
+    const params = new URLSearchParams(location.search);
+    const ref = params.get("ref");
 
     if (!isAuthenticated) {
       addToLocalCart(variantId, quantity);
@@ -102,7 +153,7 @@ const ProductDetail = () => {
     }
 
     try {
-      await addToCartMutation({ product_variant: variantId, quantity }).unwrap();
+      await addToCartMutation({ product_variant_id: variantId, quantity,...(ref ? { referral_code: ref } : {})  }).unwrap();
       toast.success("Added to cart");
       refetchCart();
     } catch (error) {
@@ -111,36 +162,38 @@ const ProductDetail = () => {
     }
   };
 
-  // Buy now
-  const handleBuyNow = () => {
-    if (!selectedVariant) return toast.error("Select a variant first");
+const handleBuyNow = () => {
+  if (!selectedVariant) return toast.error("Select a variant first");
 
-    const minimalPayload = [{
-      product_variant_id: selectedVariant.id,
-      quantity,
-      source: "buy_now",
-      timestamp: Date.now()
-    }];
+  const params = new URLSearchParams(location.search);
+  const ref = params.get('ref');
 
-    sessionStorage.setItem("buyNowMinimal", JSON.stringify(minimalPayload));
+  const minimalPayload = [{
+    product_variant_id: selectedVariant.id,
+    quantity,
+    source: "buy_now",
+    timestamp: Date.now(),
+    referral_code: ref || null,
+  }];
 
-    const params = new URLSearchParams(location.search);
-    const ref = params.get('ref')
-    const variant = selectedVariant?.variant_name || params.get('variant')
+  console.log("[DEBUG BuyNow] minimalPayload to store:", minimalPayload);
 
-    let checkoutUrl = '/checkout';
-    const checkoutParams = new URLSearchParams()
-    if(variant) checkoutParams.set('variant',variant);
-    if(ref) checkoutParams.set('ref',ref);
+  sessionStorage.setItem("buyNowMinimal", JSON.stringify(minimalPayload));
+  sessionStorage.setItem("BUY_NOW_ACTIVE", "true"); // ✅ important
 
-    if ([...checkoutParams].length) checkoutUrl += `?${checkoutParams.toString()}`
+  if (ref) {
+    sessionStorage.setItem('referral_code',ref)
+  }
+  const checkoutUrl = "/checkout";
+ 
+  
+  if (!isAuthenticated) {
+    navigate("/login", { state: { from: "/checkout" } });
+  } else {
+    navigate(checkoutUrl);
+  }
+};
 
-    if (!isAuthenticated) {
-      navigate("/login", { state: { from: "/checkout" } });
-    } else {
-      navigate(checkoutUrl);
-    }
-  };
 
   if (loading || !product) return <ProductDetailShimmer />;
 
@@ -374,7 +427,10 @@ const ProductDetail = () => {
         <div
           key={rp.id}
           className="group relative bg-white border rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 overflow-hidden cursor-pointer flex flex-col"
-          onClick={() => navigate(`/products/${rp.slug}`)}
+          onClick={() => {
+            const variantName = encodeURIComponent(rp.variants[0]?.variant_name || '');
+            navigate(`/products/${rp.slug}/?variant=${variantName}`);
+          }}
         >
           <div className="w-full aspect-[4/3] flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100 overflow-hidden">
             {rp.variants?.[0]?.images?.[0]?.image_url ? (

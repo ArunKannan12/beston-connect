@@ -1,90 +1,146 @@
 from decimal import Decimal
 from django.db import transaction
 from promoter.models import PromoterCommission, CommissionLevel
-from promoter.models import WithdrawalRequest
 import razorpay
-from django.conf import settings
 from django.utils import timezone
+from django.conf import settings
+
+from decimal import Decimal
+from django.db import transaction
+from promoter.models import PromoterCommission, CommissionLevel
 
 def apply_promoter_commission(order):
-    promoter = getattr(order, "promoter", None)
-    if not promoter:
-        return
+    """
+    Apply promoter commission per order item.
 
-    # Prevent double commission application
-    if order.total_commission > 0:
-        return
-
+    Rules:
+    - Only items with a promoter are processed.
+    - Supports multi-level commission.
+    - Leftover commission is merged into Level 1.
+    - Wallet is credited immediately for paid promoters.
+    - total_sales_count is incremented once per promoter per order.
+    """
     levels = list(CommissionLevel.objects.order_by("level").values("level", "percentage"))
     if not levels:
-        print("No CommissionLevel records found. Cannot apply commissions.")
+        print("[DEBUG] No CommissionLevel records found. Cannot apply commissions.")
         return
 
     total_order_commission = Decimal("0.00")
+    processed_promoters = set()
 
     with transaction.atomic():
-        # Track which promoters already credited to avoid double-crediting wallets
-        credited_promoters = set()
-
         for item in order.items.all():
-            variant = item.product_variant
-            base_rate = Decimal(variant.promoter_commission_rate or item.promoter_commission_rate or 0)
-            if base_rate <= 0:
+            promoter = item.promoter
+            if not promoter:
+                print(f"[DEBUG] No promoter for OrderItem {item.id}. Skipping.")
                 continue
 
-            item_total = Decimal(item.quantity) * Decimal(item.price)
+            variant = item.product_variant
+            base_rate = Decimal(variant.promoter_commission_rate or 0)
+            if base_rate <= 0:
+                print(f"[DEBUG] Item {item.id} has 0 commission rate. Skipping.")
+                continue
+
+            # Calculate item commission
+            item_total = Decimal(item.price) * item.quantity
             item_commission = (item_total * base_rate) / 100
             total_order_commission += item_commission
 
-            # Update order item
+            # Update order item fields
             item.promoter_commission_amount = item_commission
             item.promoter_commission_rate = base_rate
-            item.promoter = promoter
-            item.save(update_fields=['promoter_commission_amount', 'promoter_commission_rate', 'promoter'])
+            item.save(update_fields=['promoter_commission_amount', 'promoter_commission_rate'])
 
-            # Multi-level split
+            # Multi-level commission distribution
+            existing_commissions = PromoterCommission.objects.filter(order=order, product_variant=item.product_variant)
             current_promoter = promoter
+            remaining_commission = item_commission
+            level1_record = None
+
             for level_info in levels:
                 if not current_promoter:
                     break
 
                 share = (item_commission * Decimal(level_info["percentage"])) / 100
+                remaining_commission -= share
 
-                pc, created = PromoterCommission.objects.get_or_create(
-                    promoter=current_promoter,
-                    order=order,
-                    product_variant=variant,
-                    level=level_info["level"],
-                    defaults={
-                        "amount": share,
-                        "status": "paid" if current_promoter.promoter_type == "paid" else "pending"
-                    }
-                )
+                pc = existing_commissions.filter(promoter=current_promoter, level=level_info['level']).first()
+                old_amount = Decimal('0.00')
 
-                if created:
-                    print(f"Created PromoterCommission {pc.id} | amount={pc.amount} | status={pc.status}")
+                if pc:
+                    old_amount = pc.amount
+                    pc.amount = share
+                    pc.status = 'paid' if current_promoter.promoter_type == 'paid' else 'pending'
+                    pc.save(update_fields=['amount', 'status'])
+                    print(f"[Update] OrderItem {item.id}, Level {level_info['level']} updated: {old_amount} → {share}")
+                else:
+                    pc = PromoterCommission.objects.create(
+                        promoter=current_promoter,
+                        order=order,
+                        product_variant=item.product_variant,
+                        level=level_info['level'],
+                        amount=share,
+                        status='paid' if current_promoter.promoter_type == 'paid' else 'pending'
+                    )
+                    print(f"[Create] OrderItem {item.id}, Level {level_info['level']}: {share}")
 
-                # Credit wallet once per promoter if 'paid'
-                if pc.status == "paid" and current_promoter.id not in credited_promoters:
-                    current_promoter.add_commission(share)
-                    credited_promoters.add(current_promoter.id)
-                    print(f"Credited wallet for {current_promoter}: +{share}")
+                # Update wallet only by difference
+                current_promoter.total_commission_earned += share
+                current_promoter.save(update_fields=["total_commission_earned"])
+                if current_promoter.promoter_type == "paid":
+                    diff = share - old_amount
+                    if diff != 0:
+                        current_promoter.add_commission(diff, credit_wallet=True)
+
+                if level_info['level'] == 1:
+                    level1_record = pc
 
                 current_promoter = getattr(current_promoter, 'referred_by', None)
 
-        # Increment total_sales_count once for top promoter
-        if order.items.exists():
-            promoter.total_sales_count += 1
-            promoter.save(update_fields=['total_sales_count'])
-            print(f"Incremented total_sales_count for {promoter}: {promoter.total_sales_count}")
+            # Merge leftover into Level 1
+            if remaining_commission > 0 and level1_record:
+                old_amount = level1_record.amount
+                level1_record.amount += remaining_commission
+                level1_record.save(update_fields=['amount'])
+                promoter.total_commission_earned += remaining_commission
+                promoter.save(update_fields=["total_commission_earned"])
+                if promoter.promoter_type == "paid":
+                    promoter.add_commission(remaining_commission, credit_wallet=True)
+                print(f"[Merge] Remaining {remaining_commission} added to Level 1 ({old_amount} → {level1_record.amount})")
 
-        # Save total order commission
+            # Increment total_sales_count once per promoter per order
+            if promoter.id not in processed_promoters:
+                promoter.total_sales_count += 1
+                promoter.save(update_fields=["total_sales_count"])
+                processed_promoters.add(promoter.id)
+
+        # Update order totals
         order.total_commission = total_order_commission
-        order.save(update_fields=['total_commission'])
-        print(f"Updated Order {order.id} total_commission={order.total_commission}")
+        order.is_commission_applied = True
+        order.save(update_fields=["total_commission", "is_commission_applied"])
+        print(f"[DEBUG] Applied total commission {total_order_commission} for Order {order.id}")
 
+def process_pending_commission(promoter):
+    """
+    Process all pending commissions for a promoter.
 
-from django.utils import timezone
+    - Marks pending commissions as 'paid'.
+    - Adds the amounts to the promoter's total_commission_earned and wallet if paid.
+    """
+    pending_commissions = PromoterCommission.objects.filter(promoter=promoter, status='pending')
+    total_credited = 0
+
+    for pc in pending_commissions:
+        pc.status = 'paid'
+        pc.save(update_fields=['status'])
+        promoter.add_commission(pc.amount, credit_wallet=True)
+        total_credited += pc.amount
+        print(f"[Pending -> Paid] Credited {pc.amount} for commission {pc.id}")
+
+    if total_credited > 0:
+        print(f"[Summary] Total credited to {promoter.user.email}: {total_credited}")
+    else:
+        print(f"[Summary] No pending commissions to process for {promoter.user.email}")
 
 def initiate_payout_to_promoter(withdrawal, use_mock=True):
     """

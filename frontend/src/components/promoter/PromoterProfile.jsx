@@ -3,12 +3,14 @@ import axiosInstance from "../../api/axiosinstance.jsx";
 import { toast } from "react-toastify";
 import EditProfileModal from "../../components/promoter/EditProfileModal.jsx";
 import { motion } from "framer-motion";
-import { Wallet, Phone, CreditCard, Building2, Star, Edit3 } from "lucide-react";
+import { Wallet, Phone, CreditCard, Building2, Star, Edit3,Clipboard,Check } from "lucide-react";
 
 const PromoterProfile = () => {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [copied,setCopied] = useState(false);
+
   const [errors, setErrors] = useState({});
   const [formData, setFormData] = useState({
     phone_number: "",
@@ -78,6 +80,15 @@ const PromoterProfile = () => {
   if (!profile) return <div>No promoter profile found</div>;
 
   const promoter = profile.promoter_profile;
+  
+  const handleCopy = ()=>{
+    navigator.clipboard.writeText(promoter.referral_link);
+    setCopied(true)
+    toast.success('Referral link copied')
+    setTimeout(() => {
+      setCopied(false)
+    }, 2000);
+  }
 
   const fadeIn = {
     hidden: { opacity: 0, y: 30 },
@@ -157,6 +168,21 @@ const PromoterProfile = () => {
           <li>
             <strong className="text-gray-900">Referral Code:</strong>{" "}
             <span className="font-mono text-yellow-500">{promoter.referral_code}</span>
+          </li>
+          <li>
+            <strong className="text-gray-900">Referral Link:</strong>{' '}
+            <input
+              type="text"
+              readOnly
+              value={promoter.referral_link}
+              className="flex-1 px-3 py-2 rounded border border-gray-300 text-gray-800 bg-white/30 focus:outline-none focus:ring-2 focus:ring-yellow-400 break-all"
+            />
+            <button
+            onClick={handleCopy}
+            className="ml-2 bg-yellow-400 hover:bg-yellow-500 text-gray-900 px-2 py-1 rounded flex items-center gap-1 text-sm">
+              {copied ? <Check size={14} /> : <Clipboard size={14} />}
+              {copied ? "Copied" : "Copy"}
+            </button>
           </li>
           <li>
             <strong className="text-gray-900">Promoter Type:</strong>{" "}

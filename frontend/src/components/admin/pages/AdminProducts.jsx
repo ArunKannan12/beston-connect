@@ -172,6 +172,7 @@ const confirmDelete = async () => {
     "low-stock": products.filter((p) => p.variants?.some((v) => v.stock > 0 && v.stock <= 5)).length,
     "out-of-stock": products.filter((p) => p.variants?.every((v) => v.stock === 0)).length,
   };
+console.log(selectedProduct);
 
   return (
     <div className="p-4 sm:p-6 bg-gray-50 min-h-screen relative">
@@ -280,7 +281,8 @@ const confirmDelete = async () => {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.05 }}
-                className="bg-white rounded-xl shadow-md hover:shadow-xl transition-all overflow-hidden relative flex flex-col"
+                onClick={(e) => e.stopPropagation()}
+                 className="bg-white rounded-xl shadow-md hover:shadow-xl transition-all overflow-hidden relative flex flex-col"
               >
                 {/* Checkbox */}
                 <input
@@ -333,16 +335,23 @@ const confirmDelete = async () => {
 
                     {/* Collapsible variants */}
                     {p.variants?.length > 0 && (
-                      <div className="mt-2 border-t pt-2">
+                      <div className="mt-2 border-t pt-2" onClick={(e) => e.stopPropagation()}>
                         <button
                           className="lg:hidden text-sm text-blue-600 mb-1"
-                          onClick={() =>
-                            setVariantsOpen((prev) => ({ ...prev, [p.id]: !prev[p.id] }))
-                          }
+                          onClick={(e) => {
+                            e.stopPropagation();  
+                            setVariantsOpen((prev) => ({
+                              ...prev,
+                              [p.id]: !prev[p.id],
+                            }));
+                          }}
                         >
                           {variantsOpen[p.id] ? "Hide Variants ▲" : "View Variants ▼"}
                         </button>
-                        <div className={`${variantsOpen[p.id] ? "block" : "hidden"} lg:block space-y-1 text-xs`}>
+
+                        <div
+                          className={`${variantsOpen[p.id] ? "block" : "hidden"} lg:block space-y-1 text-xs`}
+                        >
                           {p.variants.map((v) => (
                             <div key={v.id} className="flex justify-between">
                               <span className="truncate">{v.variant_name}</span>

@@ -2,7 +2,8 @@ import React, { useState, useEffect } from "react";
 
 const VariantForm = ({variant,index,onChange,onRemove, onAddImages,onRemoveExistingImage,onRemoveNewImage}) => {
   const [previews, setPreviews] = useState([]);
-
+  console.log(variant,'variant');
+  
   // ---------------- Previews for new images ----------------
   useEffect(() => {
     if (!variant.images || !variant.images.length) {
@@ -76,6 +77,30 @@ const VariantForm = ({variant,index,onChange,onRemove, onAddImages,onRemoveExist
             className="w-full border px-2 py-1 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400"
           />
         </div>
+        {/* Weight (grams) */}
+        <div>
+          <label className="font-semibold">Weight (grams eg:'0.2 for 200 grams')</label>
+          <input
+            type="number"
+            value={variant.weight}
+            onChange={e => handleInputChange("weight", e.target.value)}
+            className="w-full border px-2 py-1 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400"
+            placeholder="Enter weight in grams"
+          />
+        </div>
+        
+      {/* Promoter Commission Rate */}
+      <div>
+        <label className="font-semibold">Promoter Commission (%)</label>
+        <input
+          type="number"
+          value={variant.promoter_commission_rate}
+          onChange={e => handleInputChange("promoter_commission_rate", e.target.value)}
+          className="w-full border px-2 py-1 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400"
+          placeholder="e.g., 10"
+        />
+      </div>
+
         {/* Featured Toggle */}
         <div className="flex items-center gap-2">
           <input

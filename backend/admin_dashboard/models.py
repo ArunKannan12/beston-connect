@@ -17,8 +17,11 @@ class AdminLog(models.Model):
     order_item = models.ForeignKey(
         OrderItem,
         on_delete=models.CASCADE,
-        related_name='admin_logs'
+        related_name='admin_logs',
+        null=True,         # ✅ allow null
+        blank=True         # ✅ allow blank
     )
+
     order = models.ForeignKey(
         Order,
         on_delete=models.CASCADE,
@@ -49,4 +52,4 @@ class AdminLog(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.order_item} - {self.action} by {self.updated_by} at {self.timestamp}"
+        return f"{self.order_item or self.order} - {self.action} by {self.updated_by} at {self.timestamp}"

@@ -18,6 +18,8 @@ const PromoterNavbar = () => {
       try {
         const res = await axiosInstance.get("promoters/me/");
         setPromoterType(res.data.promoter_profile?.promoter_type);
+        console.log(res.data.promoter_profile.promoter_type);
+        
       } catch (err) {
         console.error(err);
       }

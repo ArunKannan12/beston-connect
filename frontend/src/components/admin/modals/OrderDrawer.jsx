@@ -47,7 +47,8 @@ const OrderDrawer = ({ orderNumber, onClose }) => {
     shipping_address,
     items,
   } = order || {};
-
+  console.log(order);
+  
   return (
     <motion.div
       initial={{ x: "100%" }}

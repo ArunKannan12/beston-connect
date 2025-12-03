@@ -3,6 +3,7 @@ import React from "react";
 const CartItemList = ({ cartItems }) => {
   
   
+  
   if (!cartItems.length) return <p className="text-gray-500">Your cart is empty.</p>;
     
     
@@ -10,7 +11,8 @@ const CartItemList = ({ cartItems }) => {
     if (!url) return "/placeholder.png"; // fallback
     return url.startsWith("http") ? url : `http://localhost:8000${url}`;
   };
-
+  // console.log(cartItems,'cartitems');
+  
   return (
     <ul className="divide-y mb-6">
       {cartItems.map((item) => {

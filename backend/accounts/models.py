@@ -92,7 +92,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     social_auth_pro_pic = models.URLField(blank=True, null=True)
     custom_user_profile = models.URLField(max_length=500, blank=True, null=True)
 
-    phone_number = models.CharField(max_length=15, blank=True, null=True, validators=[phone_regex])
+    phone_number = models.CharField(unique=True,max_length=15, blank=True, null=True, validators=[phone_regex])
     address = models.TextField(blank=True, null=True)
     pincode = models.CharField(max_length=10, blank=True, null=True, validators=[pincode_regex])
     district = models.CharField(max_length=100, blank=True, null=True, validators=[name_regex])
@@ -120,12 +120,13 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     def get_short_name(self): return self.first_name
 
 
-    def assign_role(self, role_name: str, set_active: bool = False):
+    def assign_role(self, role_name: str, set_active: bool = False,referred_by=None):
         """Assign a role to the user and optionally set it active."""
         role_name_lower = role_name.lower()
         print(f"[DEBUG] assign_role called for {self.email}, role={role_name_lower}, set_active={set_active}")
 
         from accounts.models import Role, UserRole
+        from promoter.models import Promoter
 
         # Ensure the user has a primary key before assigning roles
         if not self.pk:
@@ -156,12 +157,13 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         if updated_fields:
             self.save(update_fields=updated_fields)
             print(f"[DEBUG] User updated fields: {updated_fields}")
-
+            
+        print(f"[DEBUG] Current roles for {self.email}: {self.roles_list}, active_role: {self.active_role}")
         # Auto-create profile if needed
         if role_name_lower == "promoter":
-            from promoter.models import Promoter
             promoter_obj, created = Promoter.objects.get_or_create(
-                user=self, defaults={"promoter_type": "unpaid"}
+                user=self,
+                defaults={"promoter_type": "unpaid", "referred_by":referred_by}
             )
             print(f"[DEBUG] Promoter profile {'created' if created else 'exists'}: {promoter_obj}")
 
