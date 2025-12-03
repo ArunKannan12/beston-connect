@@ -4,7 +4,7 @@ services:
     env: python
     buildCommand: "./build.sh"
     startCommand: "gunicorn backend.wsgi:application --timeout 120"
-    postDeployCommand: "python backend/manage.py migrate --noinput"
+    postDeployCommand: "python manage.py migrate --noinput"
     plan: free
     envVars:
       - fromDotEnv: true
