@@ -5,9 +5,6 @@ services:
     rootDirectory: backend
     plan: free
     buildCommand: |
-      echo "Setting environment variables for build..."
-      export ENVIRONMENT=production
-      export DJANGO_SETTINGS_MODULE=backend.settings
       echo "Installing dependencies..."
       pip install --upgrade pip
       pip install -r requirements.txt
@@ -15,11 +12,9 @@ services:
       python fix_migrations.py
       echo "Collecting static files..."
       python manage.py collectstatic --noinput
-      echo "Applying migrations..."
-      python manage.py migrate --noinput
     startCommand: gunicorn backend.wsgi:application --timeout 120
     postDeployCommand: |
-      echo "Post-deploy safety: running migrations..."
+      echo "Running migrations after deploy..."
       python manage.py migrate --noinput
     envVars:
       - key: DATABASE_URL
