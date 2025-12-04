@@ -7,22 +7,14 @@ services:
       pip install --upgrade pip
       pip install -r requirements.txt
       python manage.py collectstatic --noinput
-
     startCommand: cd backend && gunicorn backend.wsgi:application --timeout 120
-
     postDeployCommand: |
       cd backend
       python manage.py migrate --noinput
-
     plan: free
-
     envVars:
       - fromDotEnv: true
+      - key: ENVIRONMENT
+        value: "production"
       - key: DATABASE_URL
-        fromDatabase:
-          name: ecommerce_db
-          property: connectionString
-
-databases:
-  - name: ecommerce_db
-    plan: free
+        value: "postgresql://neondb_owner:npg_IzXO6wjCv1LF@ep-damp-salad-a1nr242t-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
