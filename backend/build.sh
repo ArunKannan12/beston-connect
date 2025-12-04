@@ -5,6 +5,8 @@ echo "Installing dependencies..."
 pip install --upgrade pip
 pip install -r requirements.txt
 
+cd backend  # ✅ make sure we are in the Django project root
+
 echo "Collecting static files..."
 python manage.py collectstatic --noinput
 
