@@ -2,18 +2,10 @@ services:
   - type: web
     name: ecommerce
     env: python
+    rootDirectory: backend       # Important
     buildCommand: "./build.sh"
     startCommand: "gunicorn backend.wsgi:application --timeout 120"
-    postDeployCommand: "export DJANGO_SETTINGS_MODULE=backend.settings && python backend/manage.py migrate --noinput"
+    postDeployCommand: "export DJANGO_SETTINGS_MODULE=backend.settings && python manage.py migrate --noinput"
     plan: free
     envVars:
       - fromDotEnv: true
-      # DATABASE_URL is optional if set in .env
-      # - key: DATABASE_URL
-      #   fromDatabase:
-      #     name: ecommerce_db
-      #     property: connectionString
-
-databases:
-  - name: ecommerce_db
-    plan: free

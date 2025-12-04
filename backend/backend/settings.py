@@ -117,7 +117,7 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 
 import dj_database_url
 
-ENVIRONMENT = os.getenv('ENVIRONMENT', 'local')
+ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
 
 if ENVIRONMENT == 'production':
     DATABASES = {
