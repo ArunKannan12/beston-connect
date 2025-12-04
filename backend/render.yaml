@@ -2,10 +2,31 @@ services:
   - type: web
     name: ecommerce
     env: python
-    rootDirectory: backend       # Important
-    buildCommand: "./build.sh"
-    startCommand: "gunicorn backend.wsgi:application --timeout 120"
-    postDeployCommand: "export DJANGO_SETTINGS_MODULE=backend.settings && python manage.py migrate --noinput"
+    rootDirectory: backend
     plan: free
+    buildCommand: |
+      echo "Setting environment variables for build..."
+      export ENVIRONMENT=production
+      export DJANGO_SETTINGS_MODULE=backend.settings
+      echo "Installing dependencies..."
+      pip install --upgrade pip
+      pip install -r requirements.txt
+      echo "Fixing migration order (if needed)..."
+      python fix_migrations.py
+      echo "Collecting static files..."
+      python manage.py collectstatic --noinput
+      echo "Applying migrations..."
+      python manage.py migrate --noinput
+    startCommand: gunicorn backend.wsgi:application --timeout 120
+    postDeployCommand: |
+      echo "Post-deploy safety: running migrations..."
+      python manage.py migrate --noinput
     envVars:
-      - fromDotEnv: true
+      - key: DATABASE_URL
+        fromDotEnv: true
+      - key: SECRET_KEY
+        fromDotEnv: true
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "False"

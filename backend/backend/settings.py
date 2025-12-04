@@ -114,29 +114,28 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
+
 import os
 import dj_database_url
-import logging
-from django.core.exceptions import ImproperlyConfigured
 
-# Configure logging
-logger = logging.getLogger(__name__)
+ENVIRONMENT = os.getenv('ENVIRONMENT', 'local')
+DATABASE_URL = os.environ.get('DATABASE_URL')
 
-ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
+print("ENVIRONMENT:", ENVIRONMENT)
+print("DATABASE_URL:", DATABASE_URL)
 
 if ENVIRONMENT == 'production':
-    db_url = os.environ.get('DATABASE_URL')
-    logger.debug("ENVIRONMENT=production, DATABASE_URL=%s", db_url)  # 👀 debug log
-    if db_url:
-        DATABASES = {
-            'default': dj_database_url.config(
-                default=db_url,
-                conn_max_age=600,
-                ssl_require=True
-            )
-        }
-    else:
-        raise ImproperlyConfigured("DATABASE_URL not set in production environment")
+    DATABASES = {
+        'default': dj_database_url.config(
+            default=DATABASE_URL,
+            conn_max_age=600,
+            ssl_require=True
+        )
+    }
+    if DATABASES['default'] is None:
+        raise ValueError(
+            "DATABASE_URL is not set or invalid! Check Render environment variables."
+        )
 else:
     DATABASES = {
         'default': {
@@ -148,14 +147,17 @@ else:
             'PORT': os.getenv('DB_PORT'),
         }
     }
-    logger.debug("ENVIRONMENT=development, DATABASES=%s", DATABASES)  # 👀 debug log
+
+# Optional: print parsed database settings for debugging in Render logs
+print("Parsed DATABASES config:", DATABASES)
 
 if ENVIRONMENT == 'production':
     FRONTEND_URL = os.getenv('FRONTEND_URL_PROD')
 else:
     FRONTEND_URL = os.getenv('FRONTEND_URL_DEV')
 
-logger.debug("FRONTEND_URL=%s", FRONTEND_URL)  # 👀 debug log
+
+
 
 # Password validation
 # https://docs.djangoproject.com/en/5.1/ref/settings/#auth-password-validators
