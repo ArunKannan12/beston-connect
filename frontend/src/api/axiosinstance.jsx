@@ -1,8 +1,10 @@
 import axios from "axios";
 import { getCsrfToken } from "../utils/csrf";
 
-// const BASE_URL = "https://beston-connect.onrender.com/api";
-const BASE_URL = "http://localhost:8000/api"
+const BASE_URL = import.meta.env.VITE_BASE_URL;
+
+console.log("API Base URL:", BASE_URL);
+
 
 const axiosInstance = axios.create({
   baseURL: BASE_URL,

@@ -442,3 +442,9 @@ DELHIVERY_PICKUP = {
 
 
 CRON_SECRET_KEY = env("CRON_SECRET_KEY")
+
+
+if ENVIRONMENT == "production":
+    COOKIE_SAMESITE = "None"
+else:
+    COOKIE_SAMESITE = "Lax"
