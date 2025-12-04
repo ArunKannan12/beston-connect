@@ -77,36 +77,35 @@ def auto_update_tracking():
 
 def apply_commission_cron(request):
     """
-    Triggered by an external scheduler (cron-job.org).
-    Applies promoter commission for orders where:
-      - Order is paid
-      - Commission not yet applied
-      - Order has at least one delivered, returnable item whose return period is over
+    Triggered by cron-job.org.
+    Applies promoter commission for orders that:
+      - Are paid
+      - Have not yet had commission applied
+      - Have delivered items whose return window is closed
     """
 
-    # 1️⃣ Security check
+    # 1️⃣ Security check using header
     secret = request.headers.get("X-CRON-KEY")
     if secret != settings.CRON_SECRET_KEY:
         return JsonResponse({"error": "Unauthorized"}, status=403)
 
-    # 2️⃣ Fetch orders eligible for commission
+    # 2️⃣ Get orders waiting for commission
     orders = Order.objects.filter(is_paid=True, is_commission_applied=False)
     applied_count = 0
 
     for order in orders:
-        eligible_items = order.items.filter(
-            status=OrderItemStatus.DELIVERED
-        )
-
+        eligible_items = order.items.filter(status=OrderItemStatus.DELIVERED)
         commission_due = False
+
         for item in eligible_items:
             pv = item.product_variant
+
+            # Non-returnable → immediate commission
             if not pv.allow_return:
-                # Non-returnable item → commission can be applied immediately
                 commission_due = True
                 break
 
-            # Check return period
+            # Returnable → check return window
             delivered_date = order.delivered_at.date() if order.delivered_at else None
             if not delivered_date:
                 continue
@@ -114,12 +113,11 @@ def apply_commission_cron(request):
             return_days = pv.return_days or 0
             return_end_date = delivered_date + timedelta(days=return_days)
 
-            if (return_end_date - date.today()).days <= 0:
+            if date.today() >= return_end_date:
                 commission_due = True
                 break
 
         if commission_due:
-            # Apply commission for this order
             apply_promoter_commission(order)
             order.is_commission_applied = True
             order.save()

@@ -121,8 +121,6 @@ import dj_database_url
 ENVIRONMENT = os.getenv('ENVIRONMENT', 'local')
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
-print("ENVIRONMENT:", ENVIRONMENT)
-print("DATABASE_URL:", DATABASE_URL)
 
 if ENVIRONMENT == 'production':
     DATABASES = {
@@ -441,3 +439,6 @@ DELHIVERY_PICKUP = {
         default="2/625, Parankolli, Sreemadurai (PO), Manvayal, Gudalur, The Nilgiris",
     ),
 }
+
+
+CRON_SECRET_KEY = env("CRON_SECRET_KEY")
