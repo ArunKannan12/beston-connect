@@ -2,9 +2,9 @@ services:
   - type: web
     name: ecommerce
     env: python
-    buildCommand: "./build.sh"
-    startCommand: "gunicorn backend.wsgi:application"
-    postDeployCommand: "python manage.py migrate"
+    buildCommand: "backend/./build.sh"
+    startCommand: "backend/gunicorn backend.wsgi:application"
+    postDeployCommand: "cd backend && python manage.py migrate --noinput"
     envVars:
       - fromDotEnv: true
     plan: free
