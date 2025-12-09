@@ -3,6 +3,7 @@ from django.contrib.auth import get_user_model
 from decimal import Decimal
 import random
 import string
+import re
 from products.models import ProductVariant
 from django.conf import settings
 from django.utils import timezone
@@ -114,42 +115,106 @@ class PromoterCommission(models.Model):
 
 
 class WithdrawalRequest(models.Model):
+
+    STATUS_PENDING = 'pending'
+    STATUS_APPROVED = 'approved'
+    STATUS_REJECTED = 'rejected'
+    STATUS_PROCESSING = 'processing'
+    STATUS_COMPLETED = 'completed'
+    STATUS_FAILED = 'failed'
+    STATUS_CANCELLED = 'cancelled'
+
+
     STATUS_CHOICES = [
-        ('pending', 'Pending'),
-        ('approved', 'Approved'),
-        ('rejected', 'Rejected'),
-        ('processing', 'Processing'),
-        ('completed', 'Completed'),
-        ('failed', 'Failed'),
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_APPROVED, 'Approved'),
+        (STATUS_REJECTED, 'Rejected'),
+        (STATUS_PROCESSING, 'Processing'),
+        (STATUS_COMPLETED, 'Completed'),
+        (STATUS_FAILED, 'Failed'),
+        (STATUS_CANCELLED, 'Cancelled'),
     ]
 
-    promoter = models.ForeignKey(Promoter, on_delete=models.CASCADE, related_name='withdrawals')
-    amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
-    status = models.CharField(max_length=50, choices=STATUS_CHOICES, default='pending')
+    promoter = models.ForeignKey(
+        Promoter,
+        on_delete=models.CASCADE,
+        related_name='withdrawals'
+    )
+
+    amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('0.00')
+    )
+
+    status = models.CharField(
+        max_length=50,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING
+    )
+
     requested_at = models.DateTimeField(auto_now_add=True)
     reviewed_at = models.DateTimeField(null=True, blank=True)
     admin_note = models.TextField(blank=True, null=True)
-    razorpay_payout_id = models.CharField(max_length=100, blank=True, null=True)
-    processed_at = models.DateTimeField(null=True, blank=True)
 
-    def approve(self):
-        if self.status != 'pending':
-            raise ValueError("Request already processed")
-        if not self.promoter.is_eligible_for_withdrawal or self.amount > self.promoter.wallet_balance:
-            raise ValueError("Insufficient balance or not eligible")
+    def approve(self, note=""):
+        if self.status != self.STATUS_PENDING:
+            raise ValueError("Only pending requests can be approved.")
+        if (not self.promoter.is_eligible_for_withdrawal or
+                self.amount > self.promoter.wallet_balance):
+            raise ValueError("Insufficient balance or promoter not eligible.")
 
+        # Deduct promoter wallet balance
         self.promoter.deduct_withdrawal(self.amount)
-        self.status = 'approved'
+
+        # Mark approved
+        self.status = self.STATUS_APPROVED
         self.reviewed_at = timezone.now()
-        self.save(update_fields=['status', 'reviewed_at'])
+        if note:
+            self.admin_note = note
+        self.save(update_fields=['status', 'reviewed_at', 'admin_note'])
+
 
     def reject(self, note=""):
-        if self.status != 'pending':
-            raise ValueError("Request already processed")
-        self.status = 'rejected'
+        """Admin rejects a pending request."""
+        if self.status != self.STATUS_PENDING:
+            raise ValueError("Only pending requests can be rejected.")
+        self.promoter.wallet_balance += self.amount
+        self.promoter.save()
+
+        self.status = self.STATUS_REJECTED
         self.admin_note = note
         self.reviewed_at = timezone.now()
         self.save(update_fields=['status', 'reviewed_at', 'admin_note'])
+
+    def mark_processing(self, note=""):
+        if self.status != self.STATUS_APPROVED:
+            raise ValueError("Only approved requests can move to processing.")
+        self.status = self.STATUS_PROCESSING
+        if note:
+            self.admin_note = note
+        self.save(update_fields=['status', 'admin_note'])
+
+    def mark_completed(self, note=""):
+        if self.status != self.STATUS_PROCESSING:
+            raise ValueError("Only processing requests can be completed.")
+        self.status = self.STATUS_COMPLETED
+        if note:
+            self.admin_note = note
+        self.save(update_fields=['status', 'admin_note'])
+
+
+    def mark_failed(self, note=""):
+        """Admin marks payout as failed (bank issues)."""
+        if self.status not in [self.STATUS_APPROVED, self.STATUS_PROCESSING]:
+            raise ValueError("Only approved or processing requests can fail.")
+        
+        self.promoter.wallet_balance += self.amount
+        self.promoter.save()
+
+        self.status = self.STATUS_FAILED
+        self.admin_note = note
+        self.save(update_fields=['status', 'admin_note'])
 
     def __str__(self):
         return f"{self.promoter.user.email} - {self.amount} ({self.status})"
@@ -166,6 +231,13 @@ class CommissionLevel(models.Model):
         return f"Level {self.level} - {self.percentage}%"
 
 
+def to_slug(text):
+    # Same slug function as frontend
+    text = text.lower().strip()
+    text = re.sub(r'\s+', '-', text)
+    text = re.sub(r'[^a-z0-9-]', '', text)
+    return text
+
 class PromotedProduct(models.Model):
     promoter = models.ForeignKey(Promoter, on_delete=models.CASCADE, related_name='promoted_products')
     product_variant = models.ForeignKey(ProductVariant, on_delete=models.CASCADE, related_name='promoted_by')
@@ -181,7 +253,8 @@ class PromotedProduct(models.Model):
     @property
     def referral_link(self):
         base_url = getattr(settings, 'FRONTEND_URL', '')
-        return f"{base_url}/products/{self.product_variant.variant_name}/?ref={self.promoter.referral_code}"
+        variant_slug = to_slug(self.product_variant.variant_name)
+        return f"{base_url}/products/{variant_slug}/?ref={self.promoter.referral_code}"
 
     def __str__(self):
         return f"{self.promoter.user.email} promotes {self.product_variant.variant_name}"

@@ -1,28 +1,37 @@
-from rest_framework.generics import CreateAPIView, RetrieveUpdateDestroyAPIView, ListCreateAPIView,RetrieveAPIView
+from rest_framework.generics import CreateAPIView, RetrieveUpdateDestroyAPIView, ListCreateAPIView,RetrieveAPIView,ListAPIView
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework import status
+from products.serializers import ProductVariantSerializer
 from django.utils import timezone
 from django.db.models import Count
 from django.conf import settings
+from django.db import transaction
 import razorpay
+from rest_framework import filters
+from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Sum, Count, F
 from django.db.models.functions import TruncDay, TruncMonth
-
 from django.db.models import F
-from django.db import IntegrityError
-from django.db import models
 from rest_framework.permissions import AllowAny
 from django.shortcuts import get_object_or_404
 from rest_framework.exceptions import APIException
 from orders.models import *
-from .models import Promoter, PromoterCommission, WithdrawalRequest, PromotedProduct, PremiumSettings
+from .models import (
+                     Promoter, 
+                     PromoterCommission, 
+                     WithdrawalRequest, 
+                     PromotedProduct, 
+                     PremiumSettings,
+                     CommissionLevel
+                     )
 from .serializers import (
                     PromoterSerializer, 
                     PromoterCommissionSerializer, 
-                    WithdrawalRequestSerializer, 
+                    CommissionLevelSerializer,
+                    PremiumSettingSerializer,
                     PromotedProductSerializer,
                     PromoterLightSerializer,
                     WithdrawalRequestAdminSerializer,
@@ -32,6 +41,49 @@ from products.models import ProductVariant
 from accounts.permissions import IsPromoter, IsAdminOrPromoter, IsAdmin
 from django.db.models import Sum
 
+class PromoterListAPIView(ListAPIView):
+    serializer_class = PromoterLightSerializer
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    filter_backends = [
+        DjangoFilterBackend,
+        filters.SearchFilter,
+        filters.OrderingFilter
+    ]
+
+    search_fields = [
+        "user__email",
+        "user__phone_number",
+        "referral_code",
+        "promoter_type",
+        "bank_name",
+        "account_holder_name",
+    ]
+
+    filterset_fields = [
+        "promoter_type",
+        "is_eligible_for_withdrawal",
+    ]
+
+    ordering_fields = [
+        "submitted_at",
+        'promoter_type',
+        "total_sales_count",
+        "total_commission_earned",
+        "wallet_balance"
+    ]
+
+    
+    ordering = ["-submitted_at"]  # default order
+
+    def get_queryset(self):
+        return (
+            Promoter.objects
+            .select_related("user")
+            .prefetch_related("promoted_products")
+        )
+
+    
 class BecomePromoterAPIView(CreateAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = PromoterSerializer
@@ -87,6 +139,7 @@ class BecomePromoterAPIView(CreateAPIView):
         )
 
 
+
 # --- Retrieve / Update / Delete Promoter ---
 class PromoterRetrieveUpdateDestroyAPIView(RetrieveUpdateDestroyAPIView):
     serializer_class = PromoterLightSerializer
@@ -135,11 +188,15 @@ class PromoterCommissionListCreateAPIView(ListCreateAPIView):
         promoter = Promoter.objects.get(user=self.request.user)
         serializer.save(promoter=promoter)
 
-
-# --- Withdrawal Requests ---
 class WithdrawalRequestListCreateAPIView(ListCreateAPIView):
     serializer_class = WithdrawalRequestPromoterSerializer
     permission_classes = [IsAuthenticated, IsPromoter]
+
+    # ✅ Add both ordering and filtering
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['status']  # for filtering by status
+    ordering_fields = ['requested_at', 'amount', 'status']  # for ordering
+    ordering = ['-requested_at']  # default ordering
 
     def get_queryset(self):
         return WithdrawalRequest.objects.filter(promoter__user=self.request.user)
@@ -165,16 +222,119 @@ class WithdrawalRequestListCreateAPIView(ListCreateAPIView):
             raise ValidationError("Withdrawal amount exceeds wallet balance.")
         if amount < promoter.MIN_WITHDRAWAL_AMOUNT:
             raise ValidationError(f"Minimum withdrawal amount is ₹{promoter.MIN_WITHDRAWAL_AMOUNT}")
-        if WithdrawalRequest.objects.filter(promoter=promoter,status='pending').exists():
+        if WithdrawalRequest.objects.filter(promoter=promoter, status='pending').exists():
             raise ValidationError('You already have a pending withdrawal request. Please wait until it is reviewed.')
+
         serializer.save(promoter=promoter)
 
 
-class WithdrawalRequestAdminManageView(RetrieveUpdateDestroyAPIView):
-    queryset = WithdrawalRequest.objects.all().order_by('-requested_at')
-    serializer_class = WithdrawalRequestAdminSerializer  # use admin serializer
+class CancelWithdrawalRequestAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsPromoter]
+
+    def post(self, request, pk):
+        promoter = Promoter.objects.get(user=request.user)
+
+        try:
+            withdrawal = WithdrawalRequest.objects.get(pk=pk, promoter=promoter)
+        except WithdrawalRequest.DoesNotExist:
+            raise ValidationError("Withdrawal request not found.")
+
+        if withdrawal.status != "pending":
+            raise ValidationError("Only pending requests can be cancelled.")
+
+        # 🔄 If you deducted balance earlier, add it back now
+        promoter.wallet_balance += withdrawal.amount
+        promoter.save()
+
+        withdrawal.status = "cancelled"
+        withdrawal.cancelled_at = timezone.now()
+        withdrawal.save()
+
+        return Response({"message": "Withdrawal request cancelled successfully."}, status=status.HTTP_200_OK)
+
+class WithdrawalRequestAdminListAPIView(ListAPIView):
+    queryset = WithdrawalRequest.objects.all().order_by("-requested_at")
+    serializer_class = WithdrawalRequestAdminSerializer
     permission_classes = [IsAuthenticated, IsAdmin]
 
+    filter_backends=[DjangoFilterBackend,filters.SearchFilter,filters.OrderingFilter]
+
+    filterset_fields=[
+        'status',
+        'promoter'
+    ]
+
+    search_fields=[
+        'promoter__user__first_name',
+        'promoter__user__last_name',
+        'promoter__user__email'
+    ]
+
+    ordering_fields=['requested_at','amount']
+
+class WithdrawalRequestRetrieveAPIView(RetrieveAPIView):
+    serializer_class = WithdrawalRequestPromoterSerializer
+    permission_classes = [IsAuthenticated, IsPromoter]
+
+    def get_queryset(self):
+        # Only allow this promoter to access their own requests
+        return WithdrawalRequest.objects.filter(
+            promoter__user=self.request.user
+        )
+
+class WithdrawalRequestAdminRetrieveAPIView(RetrieveAPIView):
+    queryset = WithdrawalRequest.objects.all()
+    serializer_class = WithdrawalRequestAdminSerializer
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+class WithdrawalApproveAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def post(self, request, pk):
+        withdrawal = get_object_or_404(WithdrawalRequest, pk=pk)
+        note = request.data.get("admin_note", "")
+        withdrawal.approve(note=note)
+        return Response({"status": withdrawal.status}, status=status.HTTP_200_OK)
+
+
+class WithdrawalRejectAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def post(self, request, pk):
+        withdrawal = get_object_or_404(WithdrawalRequest, pk=pk)
+        note = request.data.get("admin_note", "")
+        withdrawal.reject(note=note)
+        return Response({"status": withdrawal.status}, status=status.HTTP_200_OK)
+
+
+class WithdrawalProcessingAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def post(self, request, pk):
+        withdrawal = get_object_or_404(WithdrawalRequest, pk=pk)
+        note = request.data.get("admin_note", "")
+        withdrawal.mark_processing(note=note)
+        return Response({"status": withdrawal.status}, status=status.HTTP_200_OK)
+
+
+class WithdrawalCompleteAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def post(self, request, pk):
+        withdrawal = get_object_or_404(WithdrawalRequest, pk=pk)
+        note = request.data.get("admin_note", "")
+        withdrawal.mark_completed(note=note)
+        return Response({"status": withdrawal.status}, status=status.HTTP_200_OK)
+
+
+class WithdrawalFailAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def post(self, request, pk):
+        withdrawal = get_object_or_404(WithdrawalRequest, pk=pk)
+        note = request.data.get("admin_note", "")
+        withdrawal.mark_failed(note=note)
+        return Response({"status": withdrawal.status}, status=status.HTTP_200_OK)
 
 # --- Premium Upgrade ---
 class BecomePremiumPromoterAPIView(APIView):
@@ -258,6 +418,30 @@ class VerifyPremiumPaymentAPIView(APIView):
 
         return Response({"detail": "Promoter upgraded to premium!"}, status=status.HTTP_200_OK)
 
+class PremiumSettingsCreateAPIView(CreateAPIView):
+    queryset = PremiumSettings.objects.all()
+    serializer_class = PremiumSettingSerializer
+    permission_classes = [IsAdmin]
+
+    def create(self, request, *args, **kwargs):
+        if PremiumSettings.objects.exists():
+            return Response({'detail':'Only one premium settings record is allowed'},status=status.HTTP_400_BAD_REQUEST)
+        return super().create(request, *args, **kwargs)
+    
+class PremiumSettingsRetrieveUpdateDestroyAPIView(RetrieveUpdateDestroyAPIView):
+    queryset = PremiumSettings.objects.all()
+    serializer_class = PremiumSettingSerializer
+    permission_classes = [IsAdmin]
+
+class CommissionLevelListCreateAPIView(ListCreateAPIView):
+    queryset = CommissionLevel.objects.all()
+    serializer_class = CommissionLevelSerializer
+    permission_classes = [IsAdmin] 
+
+class CommissionLevelDetailAPIView(RetrieveUpdateDestroyAPIView):
+    queryset = CommissionLevel.objects.all()
+    serializer_class = CommissionLevelSerializer
+    permission_classes = [IsAdmin]
 
 # --- Promoter Products ---
 class PromoterProductsAPIView(APIView):
@@ -309,7 +493,7 @@ class PremiumAmountAPIView(APIView):
             return Response({'detail': 'Premium settings not configured'}, status=status.HTTP_400_BAD_REQUEST)
         
         now = timezone.now()
-        is_offer_valid = (
+        offer_valid_now = (
             premium.offer_active 
             and premium.offer_amount is not None
             and premium.offer_start
@@ -318,12 +502,16 @@ class PremiumAmountAPIView(APIView):
         )
 
         return Response({
-            "amount": premium.current_amount,          # current effective amount (offer or normal)
-            "original_amount": premium.amount,         # non-offer amount
-            "offer_active": is_offer_valid,            # true only if offer is currently valid
+            "id": premium.id,
+            "amount": premium.current_amount,        # effective amount (offer or normal)
+            "original_amount": premium.amount,       # normal amount
+            "offer_active": premium.offer_active,    # checkbox value
+            "offer_valid_now": offer_valid_now,      # currently valid?
+            "offer_amount": premium.offer_amount,
             "offer_start": premium.offer_start,
             "offer_end": premium.offer_end,
         })
+
 
 from rest_framework.exceptions import NotFound   
 class PromoterMeAPIView(RetrieveAPIView):
@@ -455,18 +643,66 @@ class UnpaidPromoterDashboardAPIView(APIView):
             "monthly_revenue_graph": list(monthly_revenue),
         })
 
-
-    
 class AvailableProductsForPromotionAPIView(APIView):
     permission_classes = [IsAuthenticated, IsPromoter]
 
     def get(self, request):
         promoter = request.user.promoter
-        promoted_ids = PromotedProduct.objects.filter(promoter=promoter).values_list("product_variant_id", flat=True)
+
+        # Already promoted product IDs
+        promoted_ids = PromotedProduct.objects.filter(promoter=promoter)\
+                                              .values_list("product_variant_id", flat=True)
         available_variants = ProductVariant.objects.exclude(id__in=promoted_ids)
-        from products.serializers import ProductVariantSerializer
-        serializer = ProductVariantSerializer(available_variants, many=True, context={"request": request})
-        return Response(serializer.data)
+
+        serializer = ProductVariantSerializer(
+            available_variants, many=True, context={"request": request}
+        )
+
+        data = []
+        is_paid = promoter.promoter_type == "paid"
+        now = timezone.now()
+        last_30_days = now - timedelta(days=30)
+
+        for variant_data, variant in zip(serializer.data, available_variants):
+            if is_paid:
+                # --- Commission ---
+                commission_rate = getattr(variant, 'promoter_commission_rate', 5)  # default 5%
+                potential_commission = float(variant.final_price) * (commission_rate / 100)
+
+                # --- Projected earnings based on last 30 days sales ---
+                total_sales_30d = OrderItem.objects.filter(
+                    product_variant=variant,
+                    order__status='delivered',
+                    order__created_at__gte=last_30_days
+                ).aggregate(total=Sum('quantity'))['total'] or 0
+                projected_earning = potential_commission * total_sales_30d
+
+                # --- Badges ---
+                total_sales_all_time = OrderItem.objects.filter(
+                    product_variant=variant,
+                    order__status='delivered'
+                ).aggregate(total=Sum('quantity'))['total'] or 0
+
+                top_selling_badge = total_sales_all_time >= 100
+                trending_badge = total_sales_30d >= 20
+                new_arrival_badge = (timezone.now() - variant.created_at).days <= 30
+               
+                variant_data.update({
+                    "potential_commission": round(potential_commission, 2),
+                    "projected_earning": round(projected_earning, 2),
+                    "top_selling_badge": top_selling_badge,
+                    "trending_badge": trending_badge,
+                    "new_arrival_badge": new_arrival_badge,
+                    
+                })
+
+            # Everyone can see stock info
+            variant_data["stock_available"] = getattr(variant, 'stock', 0)
+
+            data.append(variant_data)
+
+        return Response(data)
+
 
 class PaidPromoterDashboardAPIView(APIView):
     permission_classes = [IsAuthenticated, IsPromoter]
@@ -480,76 +716,52 @@ class PaidPromoterDashboardAPIView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # ---- COMMISSION & WALLET ----
-        total_commission = (
-            PromoterCommission.objects.filter(promoter=promoter)
-            .aggregate(total=Sum("amount"))["total"] or 0
-        )
+        now = timezone.now()
+        last_30_days = now - timedelta(days=30)
 
-        commission_last_30_days = (
-            PromoterCommission.objects.filter(
-                promoter=promoter,
-                created_at__gte=timezone.now() - timedelta(days=30)
-            ).aggregate(total=Sum("amount"))["total"] or 0
-        )
+        commissions = PromoterCommission.objects.filter(promoter=promoter)
+        withdrawals = WithdrawalRequest.objects.filter(promoter=promoter)
+        order_items = OrderItem.objects.filter(promoter=promoter)
 
-        pending_commission_amount = (
-            PromoterCommission.objects.filter(promoter=promoter, status="pending")
-            .aggregate(total=Sum("amount"))["total"] or 0
-        )
+        # --- COMMISSION ---
+        total_commission = commissions.aggregate(total=Sum("amount"))["total"] or 0
+        commission_last_30_days = commissions.filter(created_at__gte=last_30_days)\
+                                             .aggregate(total=Sum("amount"))["total"] or 0
+        pending_commission = commissions.filter(status="pending")\
+                                       .aggregate(total=Sum("amount"))["total"] or 0
+        paid_commission = commissions.filter(status="paid")\
+                                     .aggregate(total=Sum("amount"))["total"] or 0
 
-        paid_commission_amount = (
-            PromoterCommission.objects.filter(promoter=promoter, status="paid")
-            .aggregate(total=Sum("amount"))["total"] or 0
-        )
-
+        # --- WALLET ---
         wallet_balance = promoter.wallet_balance
-
-        pending_withdrawals_amount = (
-            WithdrawalRequest.objects.filter(promoter=promoter, status="pending")
-            .aggregate(total=Sum("amount"))["total"] or 0
-        )
-
-        total_withdrawn = (
-            WithdrawalRequest.objects.filter(promoter=promoter, status="approved")
-            .aggregate(total=Sum("amount"))["total"] or 0
-        )
-
+        pending_withdrawals_amount = withdrawals.filter(status="pending")\
+                                                .aggregate(total=Sum("amount"))["total"] or 0
+        total_withdrawn = withdrawals.filter(
+            status__in=["approved", "processing", "completed"]
+        ).aggregate(total=Sum("amount"))["total"] or 0
         withdrawable_balance = max(wallet_balance - pending_withdrawals_amount, 0)
 
-        # ---- PERFORMANCE (shared with unpaid) ----
-
+        # --- PERFORMANCE ---
         promoted_products = PromotedProduct.objects.filter(promoter=promoter).count()
-
-        total_referrals = OrderItem.objects.filter(promoter=promoter).count()
-
+        total_referrals = order_items.count()
         successful_orders = (
-            OrderItem.objects.filter(promoter=promoter, order__status="delivered")
-            .values("order")
-            .distinct()
-            .count()
+            order_items.filter(order__status="delivered")
+            .values("order").distinct().count()
         )
 
-        # ---- RECENT ACTIVITY ----
+        # --- RECENT ACTIVITY ---
+        recent_commissions = commissions.order_by("-created_at")\
+                                        .values("amount", "created_at", "status")[:5]
 
-        recent_commissions = (
-            PromoterCommission.objects.filter(promoter=promoter)
-            .values("amount", "created_at", "status")
-            .order_by("-created_at")[:5]
-        )
-
-        recent_withdrawals = (
-            WithdrawalRequest.objects.filter(promoter=promoter)
-            .values("amount", "created_at", "status")
-            .order_by("-created_at")[:5]
-        )
+        recent_withdrawals = withdrawals.order_by("-requested_at")\
+                                        .values("amount", "requested_at", "status")[:5]
 
         return Response({
             # Earnings
             "total_commission": total_commission,
             "commission_last_30_days": commission_last_30_days,
-            "pending_commission_amount": pending_commission_amount,
-            "paid_commission_amount": paid_commission_amount,
+            "pending_commission_amount": pending_commission,
+            "paid_commission_amount": paid_commission,
 
             # Wallet
             "wallet_balance": wallet_balance,
@@ -568,72 +780,78 @@ class PaidPromoterDashboardAPIView(APIView):
         })
 
 
-
-
 class PromoterWalletSummaryAPIView(APIView):
     permission_classes = [IsAuthenticated, IsPromoter]
 
     def get(self, request):
         promoter = request.user.promoter
-        if promoter.promoter_type != 'paid':
+
+        if promoter.promoter_type != "paid":
             raise PermissionDenied("Only paid promoters can access wallet info.")
-        total_earned = PromoterCommission.objects.filter(promoter=promoter).aggregate(total=models.Sum("amount"))["total"] or 0
-        total_withdrawn = WithdrawalRequest.objects.filter(promoter=promoter, status="approved").aggregate(total=models.Sum("amount"))["total"] or 0
-        balance = total_earned - total_withdrawn
+
+        total_earned = (
+            PromoterCommission.objects.filter(promoter=promoter)
+            .aggregate(total=Sum("amount"))["total"] or 0
+        )
+
+        total_withdrawn = (
+            WithdrawalRequest.objects.filter(
+                promoter=promoter,
+                status__in=["approved", "processing", "completed"]
+            ).aggregate(total=Sum("amount"))["total"] or 0
+        )
+        pending_withdrawals = (
+            WithdrawalRequest.objects.filter(promoter=promoter, status="pending")
+            .aggregate(total=Sum("amount"))["total"] or 0
+        )
+        withdrawable_balance = max(promoter.wallet_balance - pending_withdrawals, 0)
+        recent_commissions = PromoterCommission.objects.filter(
+            promoter=promoter).order_by('-created_at')[:5].values('amount', 'created_at', 'status')
+
+        recent_withdrawals = WithdrawalRequest.objects.filter(
+            promoter=promoter).order_by('-requested_at')[:5].values('amount', 'requested_at', 'status')
+
         return Response({
             "total_earned": total_earned,
             "total_withdrawn": total_withdrawn,
-            "available_balance": balance,
+            "available_balance": promoter.wallet_balance,
+            "pending_withdrawals": pending_withdrawals,
+            "withdrawable_balance": withdrawable_balance,
+            "recent_commissions": list(recent_commissions),
+            "recent_withdrawals": list(recent_withdrawals),
         })
+
 
 class PromoterPerformanceAnalyticsAPIView(APIView):
     permission_classes = [IsAuthenticated, IsPromoter]
 
     def get(self, request):
         promoter = request.user.promoter
-        from django.db.models.functions import TruncMonth
-        from django.db.models import Sum
 
         monthly_data = (
-            PromoterCommission.objects
-            .filter(promoter=promoter)
+            PromoterCommission.objects.filter(promoter=promoter)
             .annotate(month=TruncMonth("created_at"))
             .values("month")
             .annotate(total=Sum("amount"))
             .order_by("month")
         )
+
         return Response(monthly_data)
 
-class RegisterPromoterClickAPIview(APIView):
-    permission_classes=[AllowAny]
 
-    def post(self,request):
-        referral_code=request.data.get('referral_code')
-        product_variant_id=request.data.get('product_variant_id')
 
-        if not  referral_code or not product_variant_id:
-            return Response({'detail':'referral_code and product_variant_id required'},status=status.HTTP_400_BAD_REQUEST)
-        promoter=get_object_or_404(Promoter,referral_code=referral_code)
-        try:
-            promoted_product=PromotedProduct.objects.get(promoter=promoter,product_variant_id=product_variant_id)
-        except PromotedProduct.DoesNotExist:
-            return Response({'detail':'This product is not promoted by the promoter'},status=status.HTTP_400_BAD_REQUEST)
-        promoter.total_clicks += 1
-        promoter.save()
-        return Response({'detail':'Click registered successfully','total_clicks':promoter.total_clicks})
-    
-class PromoteProductAPIView(APIView):
-    permission_classes=[IsPromoter]
+# class PromoteProductAPIView(APIView):
+#     permission_classes=[IsPromoter]
 
-    def post(self,request):
-        promoter=request.user.promoter
-        product_variant_id=request.data.get('product_variant_id')
-        if not product_variant_id:
-            return Response({'detail':'product_variant_id required'},status=status.HTTP_400_BAD_REQUEST)
-        if PromotedProduct.objects.filter(promoter=promoter,product_variant_id=product_variant_id).exists():
-            return Response({'detail':'Already promoting this product'},status=status.HTTP_400_BAD_REQUEST)
-        PromotedProduct.objects.create(promoter=promoter ,product_variant_id=product_variant_id)
-        return Response({'detail':'Product added for promotion successfully!'})
+#     def post(self,request):
+#         promoter=request.user.promoter
+#         product_variant_id=request.data.get('product_variant_id')
+#         if not product_variant_id:
+#             return Response({'detail':'product_variant_id required'},status=status.HTTP_400_BAD_REQUEST)
+#         if PromotedProduct.objects.filter(promoter=promoter,product_variant_id=product_variant_id).exists():
+#             return Response({'detail':'Already promoting this product'},status=status.HTTP_400_BAD_REQUEST)
+#         PromotedProduct.objects.create(promoter=promoter ,product_variant_id=product_variant_id)
+#         return Response({'detail':'Product added for promotion successfully!'})
     
 class PromotedProductListAPIView(APIView):
     permission_classes = [IsPromoter]
@@ -645,35 +863,41 @@ class PromotedProductListAPIView(APIView):
         return Response(serializer.data)
 
 class RegisterPromoterClickAPIView(APIView):
-    permission_classes=[AllowAny]
+    permission_classes = [AllowAny]
 
-    def post(self,request):
-        referral_code=request.data.get('referral_code')
-        product_variant_id=request.data.get('product_variant_id')
+    @transaction.atomic
+    def post(self, request):
+        referral_code = request.data.get('referral_code')
+        product_variant_id = request.data.get('product_variant_id')
 
+        # Validate required fields
         if not referral_code or not product_variant_id:
             return Response(
-                {
-                    "detail":"referral_code and product_variant_id required"
-                },
+                {"detail": "referral_code and product_variant_id required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        promoter=get_object_or_404(Promoter,referral_code=referral_code)
-        promoted_product = PromotedProduct.objects.filter(
+
+        # Find promoter
+        promoter = get_object_or_404(Promoter, referral_code=referral_code)
+
+        # Ensure promoter actually promotes this variant
+        promoted_product = PromotedProduct.objects.select_for_update().filter(
             promoter=promoter,
             product_variant_id=product_variant_id
         ).first()
 
         if not promoted_product:
-            return Response({
-                "detail":"This product is not promoted by this promoter"
-            },
-            status=status.HTTP_400_BAD_REQUEST)
-        PromotedProduct.objects.filter(
-            id=promoted_product.id
-        ).update(click_count=F('click_count') + 1)
+            return Response(
+                {"detail": "This product is not promoted by this promoter"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        promoted_product.refresh_from_db(fields=['click_count'])
+        # Atomic increment
+        promoted_product.click_count = F("click_count") + 1
+        promoted_product.save(update_fields=["click_count"])
+        promoted_product.refresh_from_db(fields=["click_count"])
+
+        # Calculate total clicks for the promoter
         total_clicks = PromotedProduct.objects.filter(promoter=promoter).aggregate(
             total=Sum("click_count")
         )["total"] or 0

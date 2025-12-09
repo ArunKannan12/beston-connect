@@ -1,12 +1,15 @@
 from django.conf import settings
 from rest_framework import serializers
-from .models import Promoter, PromoterCommission, WithdrawalRequest, PromotedProduct, PremiumSettings
+from .models import Promoter, PromoterCommission, WithdrawalRequest, PromotedProduct, PremiumSettings,CommissionLevel
 from products.serializers import ProductVariantSerializer
 from products.models import ProductVariant
 from orders.models import Order
 from django.core.validators import RegexValidator
 from products.serializers import ProductVariantSerializer
 from urllib.parse import quote
+from django.utils import timezone
+from django.db import transaction
+from django.utils.text import slugify
 
 class PromotedProductSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product_variant.product.name', read_only=True)
@@ -30,6 +33,7 @@ class PromotedProductSerializer(serializers.ModelSerializer):
             'base_price',
             'stock',
             'image',
+            'click_count',
             'referral_link',
             'is_active',
             'created_at',
@@ -66,9 +70,9 @@ class PromotedProductSerializer(serializers.ModelSerializer):
         base_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
 
         # ✅ URL-encode the variant name
-        variant_encoded = quote(variant.variant_name)
+        variant_slug = slugify(variant.variant_name)
 
-        return f"{base_url}/products/{product.slug}/?variant={variant_encoded}&ref={obj.promoter.referral_code}"
+        return f"{base_url}/products/{product.slug}/?variant={variant_slug}&ref={obj.promoter.referral_code}"
 
     
 
@@ -304,37 +308,138 @@ class WithdrawalRequestSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['status', 'requested_at', 'reviewed_at', 'admin_note']
 
+
 class WithdrawalRequestAdminSerializer(serializers.ModelSerializer):
-    status = serializers.ChoiceField(
-        choices=['approved', 'rejected'], required=True
-    )
-    admin_note=serializers.CharField(required=False,allow_blank=True)
+    status = serializers.ChoiceField(choices=['approved', 'rejected'], required=True)
+    admin_note = serializers.CharField(required=False, allow_blank=True)
+    promoter = serializers.SerializerMethodField()
+
     class Meta:
-        model=WithdrawalRequest
-        fields=['status','admin_note']
+        model = WithdrawalRequest
+        fields = [
+            'id', 'promoter', 'amount', 'requested_at', 'reviewed_at',
+            'status', 'admin_note'
+        ]
+        read_only_fields = ['id', 'promoter', 'amount', 'requested_at', 'reviewed_at']
 
-    def validate_status(self,value):
-        instance=getattr(self,'instance',None)
-        if instance and instance.status != 'pending':
-            raise serializers.ValidationError("Only pending request can be approved or rejected")
-        return value
-    
+    # -----------------------------
+    # PROMOTER INFO
+    # -----------------------------
+    def get_promoter(self, obj):
+        promoter = obj.promoter
+        return {
+            "id": promoter.id,
+            "email": promoter.user.email,
+            "full_name": promoter.user.get_full_name()
+        }
+
+    # -----------------------------
+    # VALIDATION BEFORE UPDATE
+    # -----------------------------
+    def validate(self, attrs):
+        instance = self.instance
+        status = attrs.get("status")
+
+        # Only pending requests can be modified
+        if instance.status != "pending":
+            raise serializers.ValidationError(
+                {"status": "Only pending requests can be approved or rejected."}
+            )
+
+        promoter = instance.promoter
+
+        # Extra validation if approving
+        if status == "approved":
+            if promoter.promoter_type != "paid":
+                raise serializers.ValidationError(
+                    {"detail": "Only paid promoters can withdraw."}
+                )
+            if not promoter.is_eligible_for_withdrawal:
+                raise serializers.ValidationError(
+                    {"detail": "Promoter is not eligible for withdrawal."}
+                )
+            if instance.amount > promoter.wallet_balance:
+                raise serializers.ValidationError(
+                    {"detail": "Insufficient wallet balance."}
+                )
+
+        return attrs
+
+    # -----------------------------
+    # SAFE UPDATE WITH ATOMIC TRANSACTION
+    # -----------------------------
     def update(self, instance, validated_data):
-        status = validated_data.get('status')
-        note = validated_data.get('admin_note', '')
+        status = validated_data.get("status")
+        note = validated_data.get("admin_note", "")
 
-        if status == 'approved':
-            instance.approve()
-        elif status == 'rejected':
-            instance.reject(note)
+        promoter = instance.promoter
 
-        # Save other changes if any
-        return super().update(instance, validated_data)
+        with transaction.atomic():
+            if status == "approved":
+                # Concurrency-safe wallet deduction
+                promoter.refresh_from_db()
+                if promoter.wallet_balance < instance.amount:
+                    raise serializers.ValidationError(
+                        {"detail": "Wallet balance changed. Try again."}
+                    )
+
+                promoter.deduct_withdrawal(instance.amount)
+
+                instance.status = "approved"
+                instance.reviewed_at = timezone.now()
+                instance.save(update_fields=['status', 'reviewed_at'])
+
+            elif status == "rejected":
+                instance.status = "rejected"
+                instance.admin_note = note
+                instance.reviewed_at = timezone.now()
+                instance.save(update_fields=['status', 'reviewed_at', 'admin_note'])
+
+        return instance
+
     
 class PremiumSettingSerializer(serializers.ModelSerializer):
     class Meta:
         model = PremiumSettings
-        fields = ['id', 'amount', 'updated_at']
+        fields = [
+            "amount",
+            "offer_amount",
+            "offer_active",
+            "offer_start",
+            "offer_end",
+        ]
+    def validate(self, attrs):
+        amount = attrs.get("amount")
+        offer_amount = attrs.get("offer_amount")
+        offer_active = attrs.get("offer_active")
+        offer_start = attrs.get("offer_start")
+        offer_end = attrs.get("offer_end")
+
+        # rule 1: offer_amount must be less than main amount
+        if offer_active and offer_amount:
+            if offer_amount >= amount:
+                raise serializers.ValidationError(
+                    "Offer amount must be LESS than normal amount."
+                )
+
+        # rule 2: both start and end dates required
+        if offer_active:
+            if not offer_start or not offer_end:
+                raise serializers.ValidationError(
+                    "Offer start and end time are required when offer is active."
+                )
+            if offer_start >= offer_end:
+                raise serializers.ValidationError(
+                    "Offer end time must be AFTER offer start time."
+                )
+
+        return attrs
+class CommissionLevelSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=CommissionLevel
+        fields='__all__'
+        
+
 class WithdrawalRequestPromoterSerializer(serializers.ModelSerializer):
     class Meta:
         model = WithdrawalRequest

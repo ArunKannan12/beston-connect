@@ -146,8 +146,7 @@ else:
         }
     }
 
-# Optional: print parsed database settings for debugging in Render logs
-print("Parsed DATABASES config:", DATABASES)
+
 
 if ENVIRONMENT == 'production':
     FRONTEND_URL = os.getenv('FRONTEND_URL_PROD')

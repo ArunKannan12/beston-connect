@@ -91,6 +91,7 @@ class ProductVariant(models.Model):
     allow_replacement = models.BooleanField(default=False)
     replacement_days = models.PositiveIntegerField(null=True, blank=True)
     featured = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
     weight = models.FloatField(
         default=0.5,
         help_text="Enter weight in kilograms (e.g., 0.2 for 200g, 2 for 2kg)"

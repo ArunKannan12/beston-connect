@@ -7,10 +7,9 @@ import {
   Package,
   Users,
   ShoppingCart,
-  Warehouse,
-  Truck,
   Image as BannerIcon,
   Menu,
+  Megaphone,
   X,
 } from "lucide-react";
 
@@ -32,28 +31,23 @@ const adminSections = [
     ],
   },
   {
+    label: "Promoters",
+    icon: Megaphone,
+    subLinks: [
+      { name: "All Promoters", to: "/admin/promoters" },
+      { name: "Premium Amount", to: "/admin/premium-settings" },
+      { name: "Commission Levels", to: "/admin/commission-levels" },
+      { name: "Withdrawal requests", to: "/admin/withdrawal-requests" },
+    ],
+  },
+
+  {
     label: "Orders",
     icon: ShoppingCart,
     subLinks: [
       { name: "All Orders", to: "/admin/orders" },
       { name: "Returns", to: "/admin/returns" },
       {name:"Replacements",to:"/admin/replacements"}
-    ],
-  },
-  {
-    label: "Warehouse",
-    icon: Warehouse,
-    subLinks: [
-      {name:'Warehouse logs',to:"/admin/warehouse-logs/"},
-    ],
-  },
-  {
-    label: "Delivery",
-    icon: Truck,
-    subLinks: [
-      { name: "All Deliveryman Requests", to: "/admin/delivery/delivery-man" },
-      { name: "All Deliverymen", to: "/admin/deliverymen" },
-      { name: "Delivery tracking", to: "/admin/delivery-tracking" },
     ],
   },
   { label: "Banners", to: "/admin/banners", icon: BannerIcon },

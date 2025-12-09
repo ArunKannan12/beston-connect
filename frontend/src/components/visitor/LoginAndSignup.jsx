@@ -55,6 +55,7 @@ const LoginAndSignup = () => {
   };
 
   const handleLoginSubmit = async (e) => {
+    console.log("Login page state:", location.state);
     e.preventDefault();
     const errors = validateLogin();
     if (Object.keys(errors).length > 0) {

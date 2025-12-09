@@ -79,100 +79,124 @@ useEffect(() => {
 
   // ✅ Login (email/password or OAuth)
   const login = async (credentials = null, tokenData = null, redirectFrom = "/", navigate = null) => {
-    setLoading(true);
-    try {
-      await ensureCsrfCookie();
+  console.log("🔍 LOGIN DEBUG:");
+  console.log("redirectFrom =", redirectFrom);
+  console.log("tokenData =", tokenData);
 
-      if (credentials) {
-        await axiosInstance.post("auth/jwt/create/", credentials);
-      }
+  setLoading(true);
+  try {
+    await ensureCsrfCookie();
 
-      const user = await fetchProfile();
-
-      if (!user) {
-        setUser(null);
-        setIsAuthenticated(false);
-        return { success: false };
-      }
-
-      if (!user.is_active) {
-        toast.info("Your account is inactive. Contact support.");
-        setUser(null);
-        setIsAuthenticated(false);
-        return { success: false, reason: "inactive" };
-      }
-
-      if (!user.is_verified) {
-        toast.info("Your account isn't verified yet. Please check your email.");
-        setUser(user);
-        setIsAuthenticated(false);
-        return { success: false, reason: "unverified", email: user.email };
-      }
-
-      // User OK
-      setUser(user);
-      setIsAuthenticated(true);
-
-      // --- Merge Guest Cart ---
-      const buyNowMinimal = JSON.parse(sessionStorage.getItem("buyNowMinimal") || "null");
-      if (buyNowMinimal) {
-        sessionStorage.setItem("BUY_NOW_ACTIVE", "true"); 
-      }
-
-      const guestCart = JSON.parse(localStorage.getItem("cart") || "[]");
-      if (guestCart.length > 0) {
-        await syncGuestcart(mergeGuestCart, guestCart, null, navigate);
-      }
-
-      // 🔥 FIXED REDIRECT LOGIC
-      // -------------------------
-
-      let redirectPath = redirectFrom || "/"; // ← Respect Buy Now / Checkout redirect
-      const isReferralLogin = redirectFrom !== "/";
-
-      if(!isReferralLogin){
-
-      
-      if (user.roles?.includes("promoter") && user.active_role === "promoter") {
-        // Active promoter → redirect to promoter dashboard
-        redirectPath = user.promoter_type === "paid"
-          ? "/promoter/dashboard/paid"
-          : "/promoter/dashboard/unpaid";
-
-      } else if (user.role === "admin") {
-
-        redirectPath = "/admin/dashboard";
-
-      } else if (user.roles?.includes("promoter") && user.active_role !== "promoter") {
-
-        // Non-active promoter → show message ONLY if it's normal login
-        if (redirectFrom === "/") {
-          toast.info(
-            "You’re already a promoter! Switch to the Promoter Dashboard to manage your account."
-          );
-        }
-
-        // DO NOT override redirectPath — Buy Now path is preserved
-      }
+    if (credentials) {
+      await axiosInstance.post("auth/jwt/create/", credentials);
     }
-      // Final navigation
-      if (navigate) {
-        navigate(redirectPath, { replace: true });
-      }
 
+    const user = await fetchProfile();
 
-      return { success: true, from: redirectPath, user };
-
-    } catch (err) {
-      console.error("Login failed", err);
-      toast.error("Login failed. Please check your credentials.");
+    if (!user) {
       setUser(null);
       setIsAuthenticated(false);
-      return { success: false, error: err };
-    } finally {
-      setLoading(false);
+      return { success: false };
     }
-  };
+
+    if (!user.is_active) {
+      toast.info("Your account is inactive. Contact support.");
+      setUser(null);
+      setIsAuthenticated(false);
+      return { success: false, reason: "inactive" };
+    }
+
+    if (!user.is_verified) {
+      toast.info("Your account isn't verified yet. Please check your email.");
+      setUser(user);
+      setIsAuthenticated(false);
+      return { success: false, reason: "unverified", email: user.email };
+    }
+
+    // User OK
+    setUser(user);
+    setIsAuthenticated(true);
+
+    // --- Merge Guest Cart ---
+    const buyNowMinimal = JSON.parse(sessionStorage.getItem("buyNowMinimal") || "null");
+    if (buyNowMinimal) {
+      sessionStorage.setItem("BUY_NOW_ACTIVE", "true");
+    }
+
+    const guestCart = JSON.parse(localStorage.getItem("cart") || "[]");
+    if (guestCart.length > 0) {
+      await syncGuestcart(mergeGuestCart, guestCart, null, navigate);
+    }
+
+    // -------------------------------------
+    // ✅ REDIRECT LOGIC WITH FULL DEBUGGING
+    // -------------------------------------
+
+    let redirectPath = redirectFrom || "/";
+
+    // Detect ONLY promoter referral login
+    const isPromoterReferral =
+      redirectFrom?.includes("ref") ||
+      redirectFrom?.startsWith("/promoter");
+
+    // Detect normal login (opened /login directly or no state)
+    const isNormalLogin =
+      redirectFrom === null ||
+      redirectFrom === undefined ||
+      redirectFrom === "" ||
+      redirectFrom === "/login";
+
+    console.log("isPromoterReferral:", isPromoterReferral);
+    console.log("isNormalLogin:", isNormalLogin);
+    console.log("user:", user);
+
+    // -------------------------------------
+    // 🚫 Show promoter message ONLY on normal login
+    // -------------------------------------
+    if (isNormalLogin && !isPromoterReferral) {
+      const isPromoter = user.roles?.includes("promoter");
+
+      if (isPromoter && user.active_role !== "promoter") {
+        toast.info(
+          "You’re already a promoter! Switch to the Promoter Dashboard to manage your account."
+        );
+      }
+    }
+
+
+    // -------------------------------------
+    // 🛣️ Redirect logic
+    // -------------------------------------
+
+    if (user.roles?.includes("promoter") && user.active_role === "promoter") {
+      redirectPath =
+        user.promoter_type === "paid"
+          ? "/promoter/dashboard/paid"
+          : "/promoter/dashboard/unpaid";
+    }
+
+    if (user.role === "admin") {
+      redirectPath = "/admin/dashboard";
+    }
+
+    // Final navigation
+    if (navigate) {
+      navigate(redirectPath, { replace: true });
+    }
+
+    return { success: true, from: redirectPath, user };
+
+  } catch (err) {
+    console.error("Login failed", err);
+    toast.error("Login failed. Please check your credentials.");
+    setUser(null);
+    setIsAuthenticated(false);
+    return { success: false, error: err };
+  } finally {
+    setLoading(false);
+  }
+};
+
 
 
 

@@ -64,9 +64,10 @@ const PromoterNavbar = () => {
 
   const paidLinks = [
     { to: "/promoter/dashboard/paid", label: "Dashboard", color: "yellow" },
-    { to: "/promoter/performance", label: "Performance", color: "yellow" },
     { to: "/promoter/withdrawals", label: "Withdrawals", color: "yellow" },
+    { to: "/promoter/wallet", label: "Wallet", color: "yellow" }, // <-- added here
   ];
+
 
   const unpaidLinks = [
     { to: "/promoter/dashboard/unpaid", label: "Dashboard", color: "green" },
@@ -79,9 +80,10 @@ const PromoterNavbar = () => {
   };
 
   return (
-    <div className="flex h-screen bg-gray-100 border">
-      {/* Desktop Sidebar */}
-      <aside className="hidden md:flex md:flex-col md:w-64 bg-gray-900 text-white">
+    <div className="flex bg-gray-100 border">
+
+      {/* Desktop Sidebar (FIXED) */}
+      <aside className="hidden md:flex md:flex-col md:w-64 bg-gray-900 text-white fixed top-0 left-0 h-screen">
         <div className="p-6 border-b border-gray-700 text-center">
           <span className="text-2xl font-bold">Promoter Panel</span>
           <p className="text-sm text-gray-400 mt-1 capitalize">{promoterType || "loading..."}</p>
@@ -108,7 +110,6 @@ const PromoterNavbar = () => {
 
       {/* Mobile Sidebar */}
       <div className="md:hidden">
-        {/* Hamburger */}
         <button
           className="fixed top-4 left-4 z-50 p-2 bg-blue-700 text-white rounded-lg shadow"
           onClick={() => setSidebarOpen(true)}
@@ -116,7 +117,6 @@ const PromoterNavbar = () => {
           <HiMenu className="w-6 h-6" />
         </button>
 
-        {/* Overlay */}
         {sidebarOpen && (
           <div
             className="fixed inset-0 bg-black opacity-40 z-40"
@@ -124,7 +124,6 @@ const PromoterNavbar = () => {
           />
         )}
 
-        {/* Drawer */}
         <aside
           className={`fixed top-0 left-0 z-50 w-64 h-screen bg-gray-900 text-white p-6 flex flex-col transition-transform ${
             sidebarOpen ? "translate-x-0" : "-translate-x-full"
@@ -159,12 +158,13 @@ const PromoterNavbar = () => {
         </aside>
       </div>
 
-      {/* Main content */}
-      <main className="flex-1 min-h-screen p-6 bg-gray-50">
+      {/* Main Content (scrollable) */}
+      <main className="flex-1 ml-0 md:ml-64 min-h-screen p-6 bg-gray-50 overflow-y-auto">
         <Outlet />
       </main>
     </div>
   );
+
 };
 
 export default PromoterNavbar;

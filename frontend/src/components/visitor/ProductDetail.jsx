@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState,useRef } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import axiosInstance from '../../api/axiosinstance';
 import { toast } from 'react-toastify';
@@ -6,6 +6,11 @@ import ProductDetailShimmer from '../../shimmer/ProductDetailShimmer';
 import { useAddToCartMutation, useGetCartQuery } from '../../contexts/cartSlice';
 import { useAuth } from '../../contexts/authContext';
 import VariantDropdown from '../helpers/VariantDropDown';
+
+
+
+const CLICK_REF_KEY = "click_referral_code";         // For click tracking only
+const PURCHASE_REF_KEY = "purchase_referral_code";   // For Buy Now / Checkout
 
 const ProductDetail = () => {
   const { productSlug } = useParams();
@@ -24,6 +29,7 @@ const ProductDetail = () => {
   const [addToCartMutation, { isLoading }] = useAddToCartMutation();
   const { refetch: refetchCart } = useGetCartQuery(undefined, { skip: !isAuthenticated });
 
+  const clickTrackedRef = useRef(false);
   
   // 1️⃣ Fetch product & related products
 useEffect(() => {
@@ -48,37 +54,74 @@ useEffect(() => {
   fetchProduct();
 }, [productSlug, navigate]);
 
-// 2️⃣ Update selected variant whenever URL changes or product loads
-useEffect(() => {
-  if (!product) return;
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const ref = params.get("ref");
+    if (ref) {
+      localStorage.setItem(CLICK_REF_KEY, ref);       // for click tracking
+      sessionStorage.setItem(PURCHASE_REF_KEY, ref);  // for Buy Now / Checkout
+    }
+  }, [location.search]);
 
-  const params = new URLSearchParams(location.search);
-  const variantName = params.get("variant");
 
-  // ---- Variant Selection Logic ----
-  if (variantName) {
-    const foundVariant = product.variants.find(
-      v => v.variant_name === decodeURIComponent(variantName)
-    );
-    setSelectedVariant(foundVariant || product.variants[0]);
-  } else if (product.variants?.length > 0) {
-    setSelectedVariant(product.variants[0]);
-  }
+  const toSlug = (text) =>
+    text.toLowerCase().trim().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 
-  // ---- Call Promoter Click API ----
-  const referral_code = localStorage.getItem("referral_code");
+  // 1️⃣ Update selectedVariant based on URL or product load
+  useEffect(() => {
+    if (!product) return;
 
-  // Wait until selectedVariant is set
-  if (referral_code && selectedVariant?.id) {
-    axiosInstance.post("/promoter/click/", {
-      referral_code,
-      promoter_product_id: selectedVariant.id,
-    })
-    .then(res => console.log("Click tracked"))
-    .catch(err => console.log("Click tracking failed", err));
-  }
+    const params = new URLSearchParams(location.search);
+    const variantSlug = params.get("variant");
 
-}, [product, location.search, selectedVariant]);
+    if (variantSlug) {
+      const foundVariant = product.variants.find(
+        v => toSlug(v.variant_name) === variantSlug
+      );
+      setSelectedVariant(foundVariant || product.variants[0]);
+    } else if (product.variants?.length > 0) {
+      setSelectedVariant(product.variants[0]);
+    }
+  }, [product, location.search]);
+
+  // 2️⃣ Track promoter clicks whenever selectedVariant changes
+  useEffect(() => {
+    if (!selectedVariant?.id) return;
+
+    // ✅ Prevent double firing in Strict Mode (dev)
+    if (clickTrackedRef.current) return;
+
+    const referral_code = localStorage.getItem(CLICK_REF_KEY);
+    if (!referral_code) return;
+
+    // ✅ Use sessionStorage to track clicks for this session
+    const trackedClicks = JSON.parse(sessionStorage.getItem("tracked_clicks") || "[]");
+
+    // ❌ Already tracked? skip
+    if (trackedClicks.includes(selectedVariant.id)) return;
+
+    // ✅ Send click to backend
+    axiosInstance
+      .post("promoter/register-click/", {
+        referral_code,
+        product_variant_id: selectedVariant.id,
+      })
+      .then(() => {
+        // ✅ Mark variant as tracked in sessionStorage
+        trackedClicks.push(selectedVariant.id);
+        sessionStorage.setItem("tracked_clicks", JSON.stringify(trackedClicks));
+
+        // ✅ Remove referral key if you only track once per visit
+        localStorage.removeItem(CLICK_REF_KEY);
+
+        // ✅ Mark ref to prevent double effect within this mount
+        clickTrackedRef.current = true;
+
+        console.log(`[CLICK TRACKED] Variant ${selectedVariant.id}`);
+      })
+      .catch((err) => console.log("Click tracking failed", err));
+  }, [selectedVariant]);
+
 
 
   // Quantity helpers
@@ -164,16 +207,14 @@ useEffect(() => {
 
 const handleBuyNow = () => {
   if (!selectedVariant) return toast.error("Select a variant first");
-
-  const params = new URLSearchParams(location.search);
-  const ref = params.get('ref');
-
+  const buyNowRef = sessionStorage.getItem(PURCHASE_REF_KEY) || null;
+  
   const minimalPayload = [{
     product_variant_id: selectedVariant.id,
     quantity,
     source: "buy_now",
     timestamp: Date.now(),
-    referral_code: ref || null,
+    referral_code: buyNowRef,
   }];
 
   console.log("[DEBUG BuyNow] minimalPayload to store:", minimalPayload);
@@ -181,9 +222,6 @@ const handleBuyNow = () => {
   sessionStorage.setItem("buyNowMinimal", JSON.stringify(minimalPayload));
   sessionStorage.setItem("BUY_NOW_ACTIVE", "true"); // ✅ important
 
-  if (ref) {
-    sessionStorage.setItem('referral_code',ref)
-  }
   const checkoutUrl = "/checkout";
  
   

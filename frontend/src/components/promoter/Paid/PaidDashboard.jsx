@@ -5,21 +5,18 @@ import { toast } from "react-toastify";
 const PaidDashboard = () => {
   const [dashboard, setDashboard] = useState(null);
   const [analytics, setAnalytics] = useState([]);
-  const [promotedProducts, setPromotedProducts] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
-        const [dashboardRes, analyticsRes, productsRes] = await Promise.all([
+        const [dashboardRes, analyticsRes] = await Promise.all([
           axiosInstance.get("paid/dashboard/"),
           axiosInstance.get("paid/performance-analytics/"),
-          axiosInstance.get("promoted-products/"),
         ]);
 
         setDashboard(dashboardRes.data);
         setAnalytics(analyticsRes.data || []);
-        setPromotedProducts(productsRes.data || []);
       } catch (error) {
         console.error("Dashboard fetch error:", error.response || error.message);
         toast.error("Failed to load dashboard data.");
@@ -32,10 +29,8 @@ const PaidDashboard = () => {
   }, []);
   console.log(dashboard);
   console.log(analytics);
-  console.log(promotedProducts);
-  
-  
-  
+
+
 
   if (loading) {
     return (
@@ -84,12 +79,42 @@ const PaidDashboard = () => {
           value={`₹${dashboard?.wallet_balance?.toFixed(2)}`}
           color="text-blue-600"
         />
+        <StatCard
+          title="Commission (Last 30 Days)"
+          value={`₹${dashboard?.commission_last_30_days?.toFixed(2)}`}
+          color="text-indigo-600"
+        />
 
         <StatCard
-          title="Promoted Products"
-          value={promotedProducts.length}
-          color="text-purple-600"
+          title="Pending Commission"
+          value={`₹${dashboard?.pending_commission_amount?.toFixed(2)}`}
+          color="text-orange-600"
         />
+
+        <StatCard
+          title="Paid Commission"
+          value={`₹${dashboard?.paid_commission_amount?.toFixed(2)}`}
+          color="text-teal-600"
+        />
+
+        <StatCard
+          title="Total Withdrawn"
+          value={`₹${dashboard?.total_withdrawn?.toFixed(2)}`}
+          color="text-green-700"
+        />
+
+        <StatCard
+          title="Total Referrals"
+          value={dashboard?.total_referrals}
+          color="text-pink-600"
+        />
+
+        <StatCard
+          title="Successful Orders"
+          value={dashboard?.successful_orders}
+          color="text-blue-700"
+        />
+
       </div>
 
       {/* Performance Analytics */}
@@ -113,41 +138,32 @@ const PaidDashboard = () => {
           <p className="text-gray-500">No analytics data available.</p>
         )}
       </div>
-
-      {/* Promoted Products */}
-      <div className="bg-white shadow-md rounded-xl p-6">
+        {/* Recent Withdrawals */}
+      <div className="bg-white shadow-md rounded-xl p-6 mt-6">
         <h2 className="text-lg font-semibold text-gray-800 mb-4">
-          🛍️ Promoted Products
+          💸 Recent Withdrawals
         </h2>
 
-        {promotedProducts.length > 0 ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {promotedProducts.map((product) => (
+        {dashboard?.recent_withdrawals?.length > 0 ? (
+          <div className="space-y-3">
+            {dashboard.recent_withdrawals.map((w, i) => (
               <div
-                key={product.id}
-                className="p-4 border border-gray-200 rounded-lg hover:shadow-lg transition flex flex-col"
+                key={i}
+                className="flex justify-between p-3  rounded-lg"
               >
-                <img
-                  src={product.image}
-                  alt={product.product_name}
-                  className="w-full max-h-60 sm:max-h-48 md:max-h-56 lg:max-h-64 object-cover rounded-md mb-3"
-                />
-
-                <h3 className="font-semibold text-gray-800 mb-1">
-                  {product.product_name} ({product.variant_name})
-                </h3>
-
-                <div className="flex justify-between text-sm text-gray-500 mt-auto">
-                  <p>{product.stock} in stock</p>
-                  <p>₹{product.final_price}</p>
-                </div>
+                <span>₹{w.amount}</span>
+                <span>{new Date(w.requested_at).toLocaleDateString()}</span>
+                <span className="capitalize">{w.status}</span>
               </div>
             ))}
           </div>
         ) : (
-          <p className="text-gray-500">No promoted products yet.</p>
+          <p className="text-gray-500">No recent withdrawals.</p>
         )}
       </div>
+
+            {/* Promoted Products */}
+            
     </div>
   );
 };

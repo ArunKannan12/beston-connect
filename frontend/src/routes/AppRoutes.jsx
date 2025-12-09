@@ -5,6 +5,7 @@ import ProtectedRoutes from "./ProtectedRoutes";
 import LoadingScreen from "../components/helpers/LoadinScreen";
 import { useAuth } from "../contexts/authContext";
 
+
 // 🔄 Lazy-loaded Admin components
 const AdminReplacements = lazy(() => import("../components/admin/pages/AdminReplacements.jsx"));
 const AdminReturns = lazy(() => import("../components/admin/pages/AdminReturns.jsx"));
@@ -15,7 +16,11 @@ const AdminProducts = lazy(() => import("../components/admin/pages/AdminProducts
 const AdminAllBanner = lazy(() => import('../components/admin/pages/AdminAllBanner.jsx'));
 const AdminDashboard = lazy(() => import("../components/admin/AdminDashboard"));
 const AdminDashboardHome = lazy(() => import('../components/admin/pages/AdminDashboardHome.jsx'));
-
+const AdminPromoters =lazy(()=>import("../components/admin/pages/AdminPromoters.jsx")) ;
+const AdminCommissionLevel = lazy(()=>import("../components/admin/pages/AdminCommissionLevel.jsx")) ;
+const AdminPremiumSettings = lazy(()=>import("../components/admin/pages/AdminPremiumSettings.jsx")) ;
+const AdminPromoterWithdrwalRequest = lazy(()=>import("../components/admin/pages/AdminPromoterWithdrwalRequest.jsx"));
+const Wallet = lazy(()=>import("../components/promoter/Paid/Wallet.jsx"));
 // 🔄 Lazy-loaded Visitor/Customer components
 const VisitorHomePage = lazy(() => import("../components/visitor/VisitorHomePage"));
 const Home = lazy(() => import("../components/visitor/Home"));
@@ -40,11 +45,13 @@ const VerifyEmail = lazy(() => import("../components/visitor/VerifyEmail"));
 const FacebookAuth = lazy(() => import("../components/visitor/FacebookAuth"));
 const GoogleAuth = lazy(() => import("../components/visitor/GoogleAuth"));
 const PromoterPage = lazy(()=>import("../components/visitor/PromoterPage.jsx"));
+const Withdrawals = lazy(()=>import("../components/promoter/Paid/Withdrawals.jsx"));
+
 
 const PromoterDashboardWrapper = lazy(()=>import("../components/promoter/PromoterDashboardWrapper.jsx")) ;
 const PaidDashboard = lazy(()=>import('../components/promoter/Paid/PaidDashboard.jsx'))
 const UnpaidDashboard = lazy(()=>import('../components/promoter/Unpaid/UnpaidDashboard.jsx'))
-const AddPromotedProdcts = lazy(()=>import("../components/promoter/Unpaid/AddPromotedProdcts.jsx"));
+const AddPromotedProdcts = lazy(()=>import("../components/promoter/AddPromotedProdcts.jsx"));
 
 const PromoterNavbar = lazy(()=>import("../components/promoter/PromoterNavbar.jsx")) ;
 const PremiumPage = lazy(()=>import('../components/promoter/Unpaid/PremiumPage.jsx')) 
@@ -142,6 +149,10 @@ export const router = createBrowserRouter([
           { path: "returns", element: withSuspense(<AdminReturns />) },
           { path: "replacements", element: withSuspense(<AdminReplacements />) },
           { path: "banners", element: withSuspense(<AdminAllBanner />) },
+          {path:"promoters",element:withSuspense(<AdminPromoters/>)},
+          {path:"premium-settings",element:withSuspense(<AdminPremiumSettings/>)},
+          {path:"commission-levels",element:withSuspense(<AdminCommissionLevel/>)},
+          {path:"withdrawal-requests",element:withSuspense(<AdminPromoterWithdrwalRequest/>)},
         ],
       },
       { path: "/profile", element: withSuspense(<Profile />) },
@@ -157,9 +168,11 @@ export const router = createBrowserRouter([
       children: [
         {path:'dashboard',element:withSuspense(<PromoterDashboardWrapper/>)},
         { path:'dashboard/paid', element:withSuspense(<PaidDashboard/>)},
+        { path:'dashboard/unpaid', element:withSuspense(<UnpaidDashboard/>)},
         {path:'become-premium-promoter',element:withSuspense(<PremiumPage/>)},
-
-        { path: "dashboard/unpaid", element: withSuspense(<UnpaidDashboard />) },
+        {path:'become-premium-promoter',element:withSuspense(<PremiumPage/>)},
+        { path: "withdrawals", element: withSuspense(<Withdrawals />) },
+        { path: "wallet", element: withSuspense(<Wallet />) },
         {path:'add-promoted-products',element:withSuspense(<AddPromotedProdcts/>)},
         { path: "profile", element: withSuspense(<PromoterProfile/>) },
       ],

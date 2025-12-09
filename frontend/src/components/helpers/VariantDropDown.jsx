@@ -6,6 +6,13 @@ import { useNavigate, useLocation } from "react-router-dom";
 const VariantDropdown = ({ product, selectedVariant, setSelectedVariant, setQuantity, setCurrentImg }) => {
   const navigate = useNavigate();
   const location = useLocation();
+  // Convert text to URL-friendly slug
+  const toSlug = (text) =>
+    text
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, "-")       // spaces → hyphens
+      .replace(/[^a-z0-9-]/g, ""); // remove special chars
 
   return (
     <Listbox
@@ -16,10 +23,10 @@ const VariantDropdown = ({ product, selectedVariant, setSelectedVariant, setQuan
       setCurrentImg(0);
 
       const params = new URLSearchParams(location.search);
-      params.set("variant", variant.variant_name); // plain string
+      params.set("variant", toSlug(variant.variant_name));
       params.delete('ref')
       sessionStorage.removeItem('referral_code')
-      const queryString = params.toString().replace(/\+/g, "%20"); // replace + with %20
+      const queryString = params.toString() // replace + with %20
       navigate(`${location.pathname}?${queryString}`, { replace: true });
 }}
 

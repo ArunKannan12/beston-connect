@@ -104,7 +104,7 @@ class CommissionLevelAdmin(admin.ModelAdmin):
 # -----------------------------
 @admin.register(PromotedProduct)
 class PromotedProductAdmin(admin.ModelAdmin):
-    list_display = ('id', 'promoter', 'product_variant', 'is_active', 'created_at')
+    list_display = ('id', 'promoter', 'product_variant','click_count', 'is_active', 'created_at')
     list_filter = ('is_active', 'created_at')
     search_fields = (
         'promoter__user__username', 'promoter__user__email', 'product_variant__product__name'

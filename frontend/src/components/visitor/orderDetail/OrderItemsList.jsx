@@ -42,8 +42,19 @@ const OrderItemsList = ({ items, orderNumber, fetchOrder,orders }) => {
       setCancelReason("");
     }
   };
+  const toSlug = (text) =>
+    text
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, "-")
+      .replace(/[^a-z0-9-]/g, "");
 
-  const handleProductClick = (slug) => navigate(`/products/${slug}`);
+  const handleProductClick = (variant) => {
+    const productSlug = toSlug(variant.product_name);
+    const variantSlug = toSlug(variant.variant_name);
+    navigate(`/products/${productSlug}/?variant=${variantSlug}`);
+  };
+
     
   return (
     <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 mb-10">
@@ -89,12 +100,12 @@ const OrderItemsList = ({ items, orderNumber, fetchOrder,orders }) => {
                   src={imageUrl}
                   alt={variant.product_name}
                   className="w-16 h-16 object-cover rounded-md cursor-pointer"
-                  onClick={() => handleProductClick(variant.product_slug)}
+                  onClick={() => handleProductClick(variant)}
                 />
                 <div className="flex-1">
                   <p
                     className="font-medium text-gray-900 cursor-pointer"
-                    onClick={() => handleProductClick(variant.product_slug)}
+                    onClick={() => handleProductClick(variant)}
                   >
                     {variant.product_name}
                     {variant.variant_name && (

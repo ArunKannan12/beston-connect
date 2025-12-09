@@ -193,6 +193,14 @@ console.log(variants,'v');
               const variantLabel = variant.variant_name;
               const isNew = variant.is_new;
 
+              const toSlug = (text) =>
+                text
+                  .toLowerCase()
+                  .trim()
+                  .replace(/\s+/g, "-")
+                  .replace(/[^a-z0-9-]/g, "");
+              console.log(variant,'v');
+              
               return (
                 <motion.div
                   key={variant.id}
@@ -202,9 +210,9 @@ console.log(variants,'v');
                   className="bg-white rounded-2xl shadow-lg overflow-hidden flex flex-col hover:shadow-xl transition-all duration-300 group"
                 >
                   <Link
-                  to={`/products/${productSlug}/?variant=${encodeURIComponent(variant.variant_name)}`}
-                  className="flex flex-col h-full"
-                >
+                    to={`/products/${toSlug(variant.product_name)}/?variant=${toSlug(variant.variant_name)}${variant.referral_code ? `&ref=${variant.referral_code}` : ""}`}
+                    className="flex flex-col h-full"
+                  >
 
                     {/* Image */}
                     <div className="relative w-full aspect-square overflow-hidden">

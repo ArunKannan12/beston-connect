@@ -70,12 +70,17 @@ const Home = () => {
         variant.images?.[0]?.image_url ||
         variant.product_category?.image_url ||
         "/placeholder.png";
-      console.log(featured);
-      
+
+      const toSlug = (text) =>
+        text
+          .toLowerCase()
+          .trim()
+          .replace(/\s+/g, "-")
+          .replace(/[^a-z0-9-]/g, "");
       return (
         <Link
           key={variant.id}
-          to={`/products/${variant.product_slug}?variant=${encodeURIComponent(variant.variant_name)}`}
+          to={`/products/${variant.product_slug}?variant=${toSlug(variant.variant_name)}`}
           className="group block bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm hover:shadow-md transition duration-300"
         >
 

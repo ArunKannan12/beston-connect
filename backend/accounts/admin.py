@@ -25,7 +25,7 @@ class CustomUserAdmin(BaseUserAdmin):
 
     list_display = (
         'email', 'first_name', 'last_name', 'phone_number', 'city', 'role',
-        'is_staff', 'is_active', 'is_verified', 'auth_provider',
+        'is_staff', 'is_active', 'is_verified', 'auth_provider','active_role',
         'is_permanently_banned', 'blocked_until', 'block_count',
     )
     list_filter = (
@@ -45,7 +45,7 @@ class CustomUserAdmin(BaseUserAdmin):
             'fields': (
                 'first_name', 'last_name', 'phone_number', 'address',
                 'pincode', 'district', 'city', 'state',
-                'custom_user_profile', 'social_auth_pro_pic', 'role'
+                'custom_user_profile', 'social_auth_pro_pic', 'role','active_role'
             )
         }),
         ('Permissions', {

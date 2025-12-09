@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import axiosInstance from '../../../api/axiosinstance.jsx';
+import axiosInstance from '../../api/axiosinstance.jsx';
 import PromotedProducts from './PromotedProducts.jsx';
+import { useAuth } from '../../contexts/authContext.jsx';
 
 const AddPromotedProducts = () => {
   const [activeTab, setActiveTab] = useState('available'); 
@@ -10,12 +11,17 @@ const AddPromotedProducts = () => {
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState('');
   const [refreshPromoted, setRefreshPromoted] = useState(false);
-
+  const {user} = useAuth()
+  const promoterProfile = user?.promoter_profile;
+  const isPaid = promoterProfile?.promoter_type === 'paid';
+  
   const fetchProductsForPromotion = async () => {
     setLoading(true);
     try {
       const res = await axiosInstance.get('available-products/');
       setProducts(res.data);
+      console.log(res.data);
+      
     } catch (error) {
       console.error(error);
       setMessage('Failed to fetch products.');
@@ -103,9 +109,7 @@ const AddPromotedProducts = () => {
                   <div
                     key={product.id}
                     className={`relative border rounded-lg cursor-pointer transform transition-transform duration-300 hover:scale-105 hover:shadow-lg ${
-                      selectedProducts.includes(product.id)
-                        ? 'border-blue-500 bg-blue-50'
-                        : 'border-gray-300'
+                      selectedProducts.includes(product.id) ? 'border-blue-500 bg-blue-50' : 'border-gray-300'
                     }`}
                     onClick={() => toggleSelectProduct(product.id)}
                   >
@@ -126,17 +130,36 @@ const AddPromotedProducts = () => {
                       <p className="text-sm text-gray-600 mt-1">
                         Price: ₹{product.final_price}{' '}
                         {product.discount_percent > 0 && (
-                          <span className="line-through text-gray-400 ml-2">
-                            ₹{product.base_price}
-                          </span>
+                          <span className="line-through text-gray-400 ml-2">₹{product.base_price}</span>
                         )}
                       </p>
-                      <p className="text-sm text-gray-600 mt-1">
-                        Stock: {product.stock}{' '}
-                        {product.is_low_stock && (
-                          <span className="text-red-500 font-semibold">(Low stock!)</span>
-                        )}
-                      </p>
+                      <p className="text-sm text-gray-600 mt-1">Stock: {product.stock}</p>
+
+                      {isPaid && (
+                        <>
+                          <p className="text-sm text-green-600 mt-1">
+                            Potential Commission: ₹{product.potential_commission}
+                          </p>
+                          <p className="text-sm text-purple-600 mt-1">
+                            Projected Earnings: ₹{product.projected_earning}
+                          </p>
+                          {product.top_selling_badge && (
+                            <span className="inline-block text-xs bg-yellow-300 px-2 py-1 rounded mt-1 mr-1">
+                              Top Selling
+                            </span>
+                          )}
+                          {product.trending_badge && (
+                            <span className="inline-block text-xs bg-orange-300 px-2 py-1 rounded mt-1 mr-1">
+                              Trending
+                            </span>
+                          )}
+                          {product.new_arrival_badge && (
+                            <span className="inline-block text-xs bg-blue-300 px-2 py-1 rounded mt-1 mr-1">
+                              New Arrival
+                            </span>
+                          )}
+                        </>
+                      )}
                     </div>
                   </div>
                 ))
