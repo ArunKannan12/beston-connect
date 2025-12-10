@@ -1,8 +1,8 @@
 import axios from "axios";
 import { getCsrfToken } from "../utils/csrf";
 
-// const BASE_URL = "https://beston-connect.onrender.com/api";
-const BASE_URL = "http://localhost:8000/api"
+const BASE_URL = "https://beston-connect.onrender.com/api";
+// const BASE_URL = "http://localhost:8000/api"
 
 
 const axiosInstance = axios.create({
