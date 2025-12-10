@@ -16,6 +16,7 @@ from products.serializers import ProductVariantImageSerializer
 import logging
 logger = logging.getLogger('admin_dashboard')
 logger.debug("🚨 Logging test: This should appear in your terminal")
+from decimal import Decimal, ROUND_HALF_UP
 
 User = get_user_model()
 
@@ -161,7 +162,12 @@ class ProductVariantAdminSerializer(serializers.ModelSerializer):
             "allow_return", "return_days", "allow_replacement", "replacement_days", "weight",  # <-- add this
             "promoter_commission_rate",  # ✅ Added
         ]
-
+    def validate_weight(self, value):
+        if value is not None:
+            # Normalize to 2 decimal places
+            return Decimal(value).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return value
+    
     def validate(self, attrs):
         if attrs.get("allow_return") and (not attrs.get("return_days") or attrs["return_days"] <= 0):
             raise serializers.ValidationError("Return days must be > 0 if returns are allowed.")
@@ -183,11 +189,14 @@ class ProductVariantAdminSerializer(serializers.ModelSerializer):
         product = self.context["product"]
         validated_data["sku"] = validated_data.get("sku") or self.generate_sku(product.name)
 
+        weight = validated_data.pop("weight", None)
+        commission = validated_data.pop("promoter_commission_rate", None)
+
         # Create the variant
         variant = ProductVariant.objects.create(
             product=product,
-            weight=validated_data.get("weight", ""),
-            promoter_commission_rate=validated_data.get("promoter_commission_rate", ""),
+            weight=weight,
+            promoter_commission_rate=commission,
             **validated_data
         )
         # Add all images
@@ -200,46 +209,57 @@ class ProductVariantAdminSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         images_data = validated_data.pop("images", [])
-        existing_images = validated_data.pop("existingImages", [])
+        existing_images = validated_data.pop("existing_images", [])
         remove_images = validated_data.pop("remove_images", [])
 
-        if not validated_data.get("sku"):
-            validated_data["sku"] = instance.sku or self.generate_sku(instance.product.name)
+        # Extract special fields
+        weight = validated_data.pop("weight", None)
+        commission = validated_data.pop("promoter_commission_rate", None)
 
-        # Delete marked images
+        # Update simple fields
+        for field in [
+            "variant_name", "base_price", "offer_price", "stock", "featured",
+            "description", "allow_return", "return_days", "allow_replacement",
+            "replacement_days", "sku"
+        ]:
+            if field in validated_data:
+                setattr(instance, field, validated_data[field])
+
+        if weight is not None:
+            instance.weight = weight
+        if commission is not None:
+            instance.promoter_commission_rate = commission
+
+        instance.save()
+
+        # Delete images marked for removal
         if remove_images:
             instance.images.filter(id__in=remove_images).delete()
 
-        for attr in [
-            "variant_name", "base_price", "offer_price", "stock", "featured",
-            "description", "allow_return", "return_days", "allow_replacement",
-            "replacement_days", "weight", "promoter_commission_rate"
-        ]:
-            if attr in validated_data:
-                setattr(instance, attr, validated_data[attr])
-        instance.save()
+        # Merge image lists
+        all_incoming = existing_images + images_data
+        existing_map = {img.id: img for img in instance.images.all()}
 
-        # Merge image data
-        all_images = existing_images + images_data
-        existing_image_map = {img.id: img for img in instance.images.all()}
-        incoming_ids = [img.get("id") for img in all_images if img.get("id")]
+        incoming_ids = [item.get("id") for item in all_incoming if item.get("id")]
 
-        # Delete images not in incoming list
-        if incoming_ids:
-            for img_id in set(existing_image_map) - set(incoming_ids):
-                existing_image_map[img_id].delete()
+        # Delete images not included anymore
+        for img_id in set(existing_map.keys()) - set(incoming_ids):
+            existing_map[img_id].delete()
 
-        # Update or add images
-        for img_data in all_images:
-            img_id = img_data.get("id")
-            if img_id and img_id in existing_image_map:
-                img_instance = existing_image_map[img_id]
-                for k, v in img_data.items():
+        # Update or create images
+        for img in all_incoming:
+            img_id = img.get("id")
+            if img_id and img_id in existing_map:
+                # update
+                img_instance = existing_map[img_id]
+                for k, v in img.items():
                     if k != "id":
                         setattr(img_instance, k, v)
                 img_instance.save()
-            elif img_data.get("image"):
-                ProductVariantImage.objects.create(variant=instance, **img_data)
+            else:
+                # new image
+                if img.get("image"):
+                    ProductVariantImage.objects.create(variant=instance, **img)
 
         return instance
 
