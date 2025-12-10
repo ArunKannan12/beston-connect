@@ -489,9 +489,20 @@ class PromoterProductsAPIView(APIView):
 class PremiumAmountAPIView(APIView):
     def get(self, request):
         premium = PremiumSettings.objects.filter(active=True).order_by('-updated_at').first()
+
         if not premium:
-            return Response({'detail': 'Premium settings not configured'}, status=status.HTTP_400_BAD_REQUEST)
-        
+            # Return safe empty response so frontend works
+            return Response({
+                "id": None,
+                "amount": None,
+                "original_amount": None,
+                "offer_active": False,
+                "offer_valid_now": False,
+                "offer_amount": None,
+                "offer_start": None,
+                "offer_end": None,
+            }, status=status.HTTP_200_OK)
+
         now = timezone.now()
         offer_valid_now = (
             premium.offer_active 
@@ -503,10 +514,10 @@ class PremiumAmountAPIView(APIView):
 
         return Response({
             "id": premium.id,
-            "amount": premium.current_amount,        # effective amount (offer or normal)
-            "original_amount": premium.amount,       # normal amount
-            "offer_active": premium.offer_active,    # checkbox value
-            "offer_valid_now": offer_valid_now,      # currently valid?
+            "amount": premium.current_amount,
+            "original_amount": premium.amount,
+            "offer_active": premium.offer_active,
+            "offer_valid_now": offer_valid_now,
             "offer_amount": premium.offer_amount,
             "offer_start": premium.offer_start,
             "offer_end": premium.offer_end,
