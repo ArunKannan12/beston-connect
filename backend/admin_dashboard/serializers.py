@@ -4,6 +4,7 @@ from rest_framework import serializers
 from products.models import Product, ProductVariant, Category,ProductVariantImage
 from orders.models import Order, OrderItem,ReplacementRequest,ReturnRequest
 from django.contrib.auth import get_user_model
+from decimal import Decimal, ROUND_HALF_UP
 from django.db.models import Sum, Count,Max
 from django.db.models.functions import TruncMonth, TruncDay
 from products.serializers import CategorySerializer,ProductVariantSerializer
@@ -16,7 +17,6 @@ from products.serializers import ProductVariantImageSerializer
 import logging
 logger = logging.getLogger('admin_dashboard')
 logger.debug("🚨 Logging test: This should appear in your terminal")
-from decimal import Decimal, ROUND_HALF_UP
 
 User = get_user_model()
 
@@ -151,7 +151,7 @@ class ProductVariantAdminSerializer(serializers.ModelSerializer):
     return_days = serializers.IntegerField(required=False, allow_null=True)
     allow_replacement = serializers.BooleanField(required=False)
     replacement_days = serializers.IntegerField(required=False, allow_null=True)
-    weight = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True)
+    weight = serializers.DecimalField(max_digits=10, decimal_places=3, required=False, allow_null=True)
     promoter_commission_rate = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, allow_null=True)
 
     class Meta:
@@ -162,11 +162,17 @@ class ProductVariantAdminSerializer(serializers.ModelSerializer):
             "allow_return", "return_days", "allow_replacement", "replacement_days", "weight",  # <-- add this
             "promoter_commission_rate",  # ✅ Added
         ]
+
     def validate_weight(self, value):
         if value is not None:
             # Normalize to 2 decimal places
             return Decimal(value).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         return value
+    
+    def normalize_decimal(self, value):
+        if value is None:
+            return None
+        return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     
     def validate(self, attrs):
         if attrs.get("allow_return") and (not attrs.get("return_days") or attrs["return_days"] <= 0):
@@ -181,16 +187,16 @@ class ProductVariantAdminSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         # Remove nested/non-model keys
+        product = self.context["product"]
         images_data = validated_data.pop("images", [])
         existing_images = validated_data.pop("existingImages", [])
         validated_data.pop("remove_images", None)  # remove if present
 
-        # Auto-generate SKU if missing
-        product = self.context["product"]
-        validated_data["sku"] = validated_data.get("sku") or self.generate_sku(product.name)
-
-        weight = validated_data.pop("weight", None)
+        weight = self.normalize_decimal(validated_data.pop("weight", None))
         commission = validated_data.pop("promoter_commission_rate", None)
+
+        # Auto-generate SKU if missing
+        validated_data["sku"] = validated_data.get("sku") or self.generate_sku(product.name)
 
         # Create the variant
         variant = ProductVariant.objects.create(
@@ -209,21 +215,24 @@ class ProductVariantAdminSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         images_data = validated_data.pop("images", [])
-        existing_images = validated_data.pop("existing_images", [])
+        existing_images = validated_data.pop("existingImages", [])
         remove_images = validated_data.pop("remove_images", [])
 
-        # Extract special fields
-        weight = validated_data.pop("weight", None)
+        weight = self.normalize_decimal(validated_data.pop("weight", None))
         commission = validated_data.pop("promoter_commission_rate", None)
 
-        # Update simple fields
-        for field in [
+        if not validated_data.get("sku"):
+            validated_data["sku"] = instance.sku or self.generate_sku(instance.product.name)
+
+        # Delete marked images
+
+        for attr in [
             "variant_name", "base_price", "offer_price", "stock", "featured",
             "description", "allow_return", "return_days", "allow_replacement",
             "replacement_days", "sku"
         ]:
-            if field in validated_data:
-                setattr(instance, field, validated_data[field])
+            if attr in validated_data:
+                setattr(instance, attr, validated_data[attr])
 
         if weight is not None:
             instance.weight = weight
@@ -232,34 +241,31 @@ class ProductVariantAdminSerializer(serializers.ModelSerializer):
 
         instance.save()
 
-        # Delete images marked for removal
         if remove_images:
             instance.images.filter(id__in=remove_images).delete()
 
-        # Merge image lists
-        all_incoming = existing_images + images_data
-        existing_map = {img.id: img for img in instance.images.all()}
 
-        incoming_ids = [item.get("id") for item in all_incoming if item.get("id")]
+        # Merge image data
+        all_images = existing_images + images_data
+        existing_image_map = {img.id: img for img in instance.images.all()}
+        incoming_ids = [img.get("id") for img in all_images if img.get("id")]
 
-        # Delete images not included anymore
-        for img_id in set(existing_map.keys()) - set(incoming_ids):
-            existing_map[img_id].delete()
+        # Delete images not in incoming list
+        if incoming_ids:
+            for img_id in set(existing_image_map) - set(incoming_ids):
+                existing_image_map[img_id].delete()
 
-        # Update or create images
-        for img in all_incoming:
-            img_id = img.get("id")
-            if img_id and img_id in existing_map:
-                # update
-                img_instance = existing_map[img_id]
-                for k, v in img.items():
+        # Update or add images
+        for img_data in all_images:
+            img_id = img_data.get("id")
+            if img_id and img_id in existing_image_map:
+                img_instance = existing_image_map[img_id]
+                for k, v in img_data.items():
                     if k != "id":
                         setattr(img_instance, k, v)
                 img_instance.save()
-            else:
-                # new image
-                if img.get("image"):
-                    ProductVariantImage.objects.create(variant=instance, **img)
+            elif img_data.get("image"):
+                ProductVariantImage.objects.create(variant=instance, **img_data)
 
         return instance
 

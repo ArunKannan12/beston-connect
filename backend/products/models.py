@@ -92,14 +92,19 @@ class ProductVariant(models.Model):
     replacement_days = models.PositiveIntegerField(null=True, blank=True)
     featured = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
-    weight = models.FloatField(
-        default=0.5,
+    weight = models.DecimalField(
+        default=0.50,
+        max_digits=10,
+        decimal_places=2,
         help_text="Enter weight in kilograms (e.g., 0.2 for 200g, 2 for 2kg)"
     )
-    promoter_commission_rate = models.FloatField(
-        default=0.0,
+    promoter_commission_rate = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0.00,
         help_text="Fixed commission % for promoters on this product"
     )
+
     def clean(self):
         errors = {}
         if self.base_price is None:
