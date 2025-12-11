@@ -433,11 +433,15 @@ const handleBuyNow = () => {
             <p className="text-red-500 font-semibold">Return and Replacement are not available for this product.</p>
           )}
 
-          <p className="text-xs text-gray-500 mt-2">
-            Please ensure the item is unused and in original packaging to be eligible.
-          </p>
+          {/* ✅ Only show note if return or replacement is available */}
+          {(selectedVariant.allow_return || selectedVariant.allow_replacement) && (
+            <p className="text-xs text-gray-500 mt-2">
+              Please ensure the item is unused and in original packaging to be eligible.
+            </p>
+          )}
         </div>
       )}
+
 
 
 

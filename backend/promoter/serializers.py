@@ -434,6 +434,7 @@ class PremiumSettingSerializer(serializers.ModelSerializer):
                 )
 
         return attrs
+    
 class CommissionLevelSerializer(serializers.ModelSerializer):
     class Meta:
         model=CommissionLevel
