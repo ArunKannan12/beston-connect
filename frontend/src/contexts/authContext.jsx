@@ -198,13 +198,15 @@ useEffect(() => {
 };
 
 
-
-
   // ✅ Logout
-  const logout = async () => {
+ const logout = async () => {
     setLoading(true);
     try {
-      await axiosInstance.post("auth/jwt/logout/");
+      await axiosInstance.post(
+        "auth/jwt/logout/",
+        {},
+        { withCredentials: true } // ✅ ensures cookies are sent
+      );
     } catch (error) {
       console.warn("Logout error", error);
     } finally {

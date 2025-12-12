@@ -604,15 +604,21 @@ class LogoutView(APIView):
                 token = RefreshToken(refresh_token)
                 token.blacklist()
             except TokenError:
-                pass  # Optional: log invalid token
+                pass
 
         response = Response({'message': 'Logged out successfully'}, status=status.HTTP_200_OK)
-        response.delete_cookie('access_token', path='/')
-        response.delete_cookie('refresh_token', path='/')
-        response.delete_cookie('csrftoken', path='/')
+
+        cookie_params = {
+            "path": "/",
+            "secure": getattr(settings, 'SIMPLE_JWT', {}).get('AUTH_COOKIE_SECURE', False),
+            "samesite": getattr(settings, 'SIMPLE_JWT', {}).get('AUTH_COOKIE_SAMESITE', 'Lax'),
+        }
+
+        response.delete_cookie('access_token', **cookie_params)
+        response.delete_cookie('refresh_token', **cookie_params)
+        response.delete_cookie('csrftoken', **cookie_params)
 
         return response
-    
 
 @method_decorator(ensure_csrf_cookie, name='dispatch')
 class SetCSRFCookieView(APIView):
