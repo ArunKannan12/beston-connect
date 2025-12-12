@@ -3,7 +3,6 @@ import axiosInstance from "../api/axiosinstance";
 import { useMergeGuestCartMutation } from "./cartSlice";
 import { syncGuestcart } from "../utils/syncGuestCart";
 import { toast } from "react-toastify";
-import { getCookie } from "../utils/getCookie";
 
 
 // Create context

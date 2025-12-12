@@ -607,12 +607,15 @@ class LogoutView(APIView):
 
         response = Response({'message': 'Logged out successfully'}, status=status.HTTP_200_OK)
 
-        # ✅ Only path/domain allowed
-        response.delete_cookie('access_token', path='/')
-        response.delete_cookie('refresh_token', path='/')
-        response.delete_cookie('csrftoken', path='/')
+        cookie_names = ['access_token', 'refresh_token', 'csrftoken']
+        paths = ['/', '']  # '/' and empty path covers most cases
+
+        for cookie in cookie_names:
+            for path in paths:
+                response.delete_cookie(cookie, path=path)
 
         return response
+
 
 @method_decorator(ensure_csrf_cookie, name='dispatch')
 class SetCSRFCookieView(APIView):
