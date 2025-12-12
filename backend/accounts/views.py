@@ -316,18 +316,20 @@ class GoogleAuthView(APIView):
                 key='access_token',
                 value=access_token,
                 httponly=True,
-                secure=not settings.DEBUG,
-               samesite='None',
-                max_age=3600
+                secure=getattr(settings, 'SIMPLE_JWT', {}).get('AUTH_COOKIE_SECURE', False),
+                samesite=getattr(settings, 'SIMPLE_JWT', {}).get('AUTH_COOKIE_SAMESITE', 'Lax'),
+                max_age=3600,
+                path='/',
             )
+
             response.set_cookie(
                 key='refresh_token',
                 value=refresh_token,
                 httponly=True,
-                secure=not settings.DEBUG,
-               samesite='None',
-                max_age=7*24*60*60
-
+                secure=getattr(settings, 'SIMPLE_JWT', {}).get('AUTH_COOKIE_SECURE', False),
+                samesite=getattr(settings, 'SIMPLE_JWT', {}).get('AUTH_COOKIE_SAMESITE', 'Lax'),
+                max_age=7*24*60*60,
+                path='/',
             )
             # Capture IP address
             ip = (
@@ -442,23 +444,24 @@ class FacebookLoginView(GenericAPIView):
 
 
         response.set_cookie(
-                key='access_token',
-                value=access_token,
-                httponly=True,
-                secure=not settings.DEBUG,
-               samesite='None',
-                max_age=3600
-            )
-        response.set_cookie(
-                key='refresh_token',
-                value=refresh_token,
-                httponly=True,
-                secure=not settings.DEBUG,
-               samesite='None',
-                max_age=7*24*60*60,
-                path='/'
+            key='access_token',
+            value=access_token,
+            httponly=True,
+            secure=getattr(settings, 'SIMPLE_JWT', {}).get('AUTH_COOKIE_SECURE', False),
+            samesite=getattr(settings, 'SIMPLE_JWT', {}).get('AUTH_COOKIE_SAMESITE', 'Lax'),
+            max_age=3600,
+            path='/',
+        )
 
-            )
+        response.set_cookie(
+            key='refresh_token',
+            value=refresh_token,
+            httponly=True,
+            secure=getattr(settings, 'SIMPLE_JWT', {}).get('AUTH_COOKIE_SECURE', False),
+            samesite=getattr(settings, 'SIMPLE_JWT', {}).get('AUTH_COOKIE_SAMESITE', 'Lax'),
+            max_age=7*24*60*60,
+            path='/',
+        )
 
         return response
 
@@ -479,15 +482,37 @@ class CookieTokenRefreshView(TokenRefreshView):
 
             response = Response({'message': 'Token refreshed'}, status=status.HTTP_200_OK)
 
-            response.set_cookie('access_token', new_access_token, httponly=True, secure=not settings.DEBUG,
-                               samesite='None', path='/', max_age=60 * 60)
-            response.set_cookie('refresh_token', new_refresh_token, httponly=True, secure=not settings.DEBUG,
-                               samesite='None', path='/', max_age=7 * 24 * 60 * 60)
+            response.set_cookie(
+                key='access_token',
+                value=new_access_token,
+                httponly=True,
+                secure=getattr(settings, 'SIMPLE_JWT', {}).get('AUTH_COOKIE_SECURE', False),
+                samesite=getattr(settings, 'SIMPLE_JWT', {}).get('AUTH_COOKIE_SAMESITE', 'Lax'),
+                max_age=3600,
+                path='/',
+            )
+
+            response.set_cookie(
+                key='refresh_token',
+                value=new_refresh_token,
+                httponly=True,
+                secure=getattr(settings, 'SIMPLE_JWT', {}).get('AUTH_COOKIE_SECURE', False),
+                samesite=getattr(settings, 'SIMPLE_JWT', {}).get('AUTH_COOKIE_SAMESITE', 'Lax'),
+                max_age=7*24*60*60,
+                path='/',
+            )
 
             # Refresh CSRF token
             csrf_token = get_token(request)
-            response.set_cookie('csrftoken', csrf_token, httponly=False, secure=not settings.DEBUG,
-                               samesite='None', path='/', max_age=60 * 60)
+            response.set_cookie(
+                'csrftoken',
+                csrf_token,
+                httponly=False,
+                secure=getattr(settings, 'CSRF_COOKIE_SECURE', False),
+                samesite=getattr(settings, 'CSRF_COOKIE_SAMESITE', 'Lax'),
+                path='/',
+                max_age=60*60
+            )
 
             return response
 
@@ -517,6 +542,7 @@ class CookieTokenObtainPairView(TokenObtainPairView):
             return Response({'error': 'User is not verified'}, status=status.HTTP_403_FORBIDDEN)
 
         remember_me = request.data.get('remember_me', False)
+
         res = Response({
             'message': 'Login successful',
             'email': user.email,
@@ -525,16 +551,45 @@ class CookieTokenObtainPairView(TokenObtainPairView):
             'last_name': user.last_name
         }, status=status.HTTP_200_OK)
 
-        # Set access token cookie
-        res.set_cookie('access_token', access, httponly=True, secure=not settings.DEBUG,
-                  samesite='None', path='/', max_age=60 * 60)
-        res.set_cookie('refresh_token', refresh, httponly=True, secure=not settings.DEBUG,
-                   samesite='None', path='/', max_age=7 * 24 * 60 * 60 if remember_me else None)
+        # Use settings for cookie security and samesite
+        secure = getattr(settings, 'SIMPLE_JWT', {}).get('AUTH_COOKIE_SECURE', False)
+        samesite = getattr(settings, 'SIMPLE_JWT', {}).get('AUTH_COOKIE_SAMESITE', 'Lax')
 
-        # 🔐 Set CSRF token cookie
+        # Set access token cookie
+        res.set_cookie(
+            'access_token',
+            access,
+            httponly=True,
+            secure=secure,
+            samesite=samesite,
+            path='/',
+            max_age=60 * 60
+        )
+
+        # Set refresh token cookie
+        res.set_cookie(
+            'refresh_token',
+            refresh,
+            httponly=True,
+            secure=secure,
+            samesite=samesite,
+            path='/',
+            max_age=7 * 24 * 60 * 60 if remember_me else None
+        )
+
+        # Set CSRF token cookie using settings if available
+        csrf_secure = getattr(settings, 'CSRF_COOKIE_SECURE', False)
+        csrf_samesite = getattr(settings, 'CSRF_COOKIE_SAMESITE', 'Lax')
         csrf_token = get_token(request)
-        res.set_cookie('csrftoken', csrf_token, httponly=False, secure=not settings.DEBUG,
-                   samesite='None', path='/', max_age=60 * 60)
+        res.set_cookie(
+            'csrftoken',
+            csrf_token,
+            httponly=False,
+            secure=csrf_secure,
+            samesite=csrf_samesite,
+            path='/',
+            max_age=60 * 60
+        )
 
         return res
 
@@ -552,9 +607,9 @@ class LogoutView(APIView):
                 pass  # Optional: log invalid token
 
         response = Response({'message': 'Logged out successfully'}, status=status.HTTP_200_OK)
-        response.delete_cookie('access_token', path='/', secure=True, samesite='None')
-        response.delete_cookie('refresh_token', path='/', secure=True, samesite='None')
-        response.delete_cookie('csrftoken', path='/', secure=True, samesite='None')
+        response.delete_cookie('access_token', path='/')
+        response.delete_cookie('refresh_token', path='/')
+        response.delete_cookie('csrftoken', path='/')
 
         return response
     
