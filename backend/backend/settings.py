@@ -353,7 +353,8 @@ CORS_ALLOW_CREDENTIALS = True
 CSRF_COOKIE_HTTPONLY = False
 CORS_ALLOWED_ORIGINS = [
     "https://beston.netlify.app",
-    "http://localhost:5173"
+    "http://localhost:5173",
+    "https://beston-connect.onrender.com",
 ]
 
 CSRF_COOKIE_NAME = 'csrftoken'
@@ -417,8 +418,6 @@ CSRF_TRUSTED_ORIGINS = env.list(
 
 
 
-
-
 if ENVIRONMENT == 'production':
     DELHIVERY_API_TOKEN = env("DELHIVERY_LIVE_API_TOKEN")
 else:
@@ -442,8 +441,3 @@ DELHIVERY_PICKUP = {
 
 CRON_SECRET_KEY = env("CRON_SECRET_KEY")
 
-
-if ENVIRONMENT == "production":
-    COOKIE_SAMESITE = "None"
-else:
-    COOKIE_SAMESITE = "Lax"

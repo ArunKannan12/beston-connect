@@ -593,7 +593,6 @@ class CookieTokenObtainPairView(TokenObtainPairView):
 
         return res
 
-    
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -608,15 +607,10 @@ class LogoutView(APIView):
 
         response = Response({'message': 'Logged out successfully'}, status=status.HTTP_200_OK)
 
-        cookie_params = {
-            "path": "/",
-            "secure": getattr(settings, 'SIMPLE_JWT', {}).get('AUTH_COOKIE_SECURE', False),
-            "samesite": getattr(settings, 'SIMPLE_JWT', {}).get('AUTH_COOKIE_SAMESITE', 'Lax'),
-        }
-
-        response.delete_cookie('access_token', **cookie_params)
-        response.delete_cookie('refresh_token', **cookie_params)
-        response.delete_cookie('csrftoken', **cookie_params)
+        # ✅ Only path/domain allowed
+        response.delete_cookie('access_token', path='/')
+        response.delete_cookie('refresh_token', path='/')
+        response.delete_cookie('csrftoken', path='/')
 
         return response
 
