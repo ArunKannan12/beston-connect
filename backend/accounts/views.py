@@ -593,6 +593,9 @@ class CookieTokenObtainPairView(TokenObtainPairView):
 
         return res
 
+from django.contrib.auth import logout as django_logout
+from django.conf import settings
+
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -605,17 +608,32 @@ class LogoutView(APIView):
             except TokenError:
                 pass
 
-        response = Response({'message': 'Logged out successfully'}, status=status.HTTP_200_OK)
+        # ✅ Kill Django session server-side
+        django_logout(request)
 
-        cookie_names = ['access_token', 'refresh_token', 'csrftoken']
-        paths = ['/', '']  # '/' and empty path covers most cases
+        response = Response(
+            {'message': 'Logged out successfully'},
+            status=status.HTTP_200_OK
+        )
 
-        for cookie in cookie_names:
-            for path in paths:
-                response.delete_cookie(cookie, path=path)
+        # ✅ Use same samesite as login
+        samesite = settings.SIMPLE_JWT.get('AUTH_COOKIE_SAMESITE', 'Lax')
+
+        # ✅ Delete JWT cookies
+        response.delete_cookie('access_token', path='/', samesite=samesite)
+        response.delete_cookie('refresh_token', path='/', samesite=samesite)
+
+        # ✅ Delete CSRF cookie
+        response.delete_cookie('csrftoken', path='/', samesite=settings.CSRF_COOKIE_SAMESITE)
+
+        # ✅ Delete Django session cookie (THIS is the missing piece)
+        response.delete_cookie(
+            settings.SESSION_COOKIE_NAME,   # usually "sessionid"
+            path='/',
+            samesite=settings.SESSION_COOKIE_SAMESITE
+        )
 
         return response
-
 
 @method_decorator(ensure_csrf_cookie, name='dispatch')
 class SetCSRFCookieView(APIView):
