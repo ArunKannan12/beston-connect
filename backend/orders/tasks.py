@@ -84,44 +84,76 @@ def apply_commission_cron(request):
       - Have delivered items whose return window is closed
     """
 
+    logger.warning("[CRON] Commission cron triggered")
+
     # 1️⃣ Security check using header
     secret = request.headers.get("X-CRON-KEY")
     if secret != settings.CRON_SECRET_KEY:
+        logger.warning("[CRON] Unauthorized request – invalid X-CRON-KEY")
         return JsonResponse({"error": "Unauthorized"}, status=403)
 
     # 2️⃣ Get orders waiting for commission
     orders = Order.objects.filter(is_paid=True, is_commission_applied=False)
+    logger.warning(f"[CRON] Found {orders.count()} orders pending commission")
+
     applied_count = 0
 
     for order in orders:
+        logger.warning(f"[ORDER] Checking Order {order.id}")
+        logger.warning(f"[ORDER] delivered_at={order.delivered_at}, is_paid={order.is_paid}")
+
         eligible_items = order.items.filter(status=OrderItemStatus.DELIVERED)
+        logger.warning(f"[ORDER] Delivered items: {[i.id for i in eligible_items]}")
+
         commission_due = False
 
         for item in eligible_items:
             pv = item.product_variant
+            logger.warning(
+                f"[ITEM] Item {item.id}: allow_return={pv.allow_return}, "
+                f"return_days={pv.return_days}"
+            )
 
             # Non-returnable → immediate commission
             if not pv.allow_return:
+                logger.warning(f"[ITEM] Item {item.id} is non-returnable → commission eligible")
                 commission_due = True
                 break
 
             # Returnable → check return window
             delivered_date = order.delivered_at.date() if order.delivered_at else None
+            logger.warning(f"[ITEM] delivered_date={delivered_date}")
+
             if not delivered_date:
+                logger.warning(f"[SKIP] Item {item.id}: delivered_at missing")
                 continue
 
             return_days = pv.return_days or 0
             return_end_date = delivered_date + timedelta(days=return_days)
+            logger.warning(
+                f"[ITEM] return_end_date={return_end_date}, today={date.today()}"
+            )
 
             if date.today() >= return_end_date:
+                logger.warning(f"[ITEM] Item {item.id} return window closed → commission eligible")
                 commission_due = True
                 break
+            else:
+                logger.warning(f"[ITEM] Item {item.id} return window still open")
 
         if commission_due:
+            logger.warning(f"[APPLY] Applying commission for Order {order.id}")
             apply_promoter_commission(order)
+
             order.is_commission_applied = True
-            order.save()
+            order.save(update_fields=["is_commission_applied"])
+
             applied_count += 1
+            logger.warning(f"[APPLY] Commission applied for Order {order.id}")
+        else:
+            logger.warning(f"[SKIP] Order {order.id} not eligible for commission")
+
+    logger.warning(f"[CRON] Completed. Commission applied for {applied_count} orders.")
 
     return JsonResponse({
         "status": "success",

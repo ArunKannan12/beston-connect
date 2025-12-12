@@ -594,7 +594,7 @@ class CookieTokenObtainPairView(TokenObtainPairView):
         return res
 
 from django.contrib.auth import logout as django_logout
-from django.conf import settings
+
 
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
