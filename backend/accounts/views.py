@@ -316,7 +316,7 @@ class GoogleAuthView(APIView):
                 key='access_token',
                 value=access_token,
                 httponly=True,
-                secure = True,
+                secure=not settings.DEBUG,
                samesite='None',
                 max_age=3600
             )
@@ -324,7 +324,7 @@ class GoogleAuthView(APIView):
                 key='refresh_token',
                 value=refresh_token,
                 httponly=True,
-                secure = True,
+                secure=not settings.DEBUG,
                samesite='None',
                 max_age=7*24*60*60
 
@@ -445,7 +445,7 @@ class FacebookLoginView(GenericAPIView):
                 key='access_token',
                 value=access_token,
                 httponly=True,
-                secure = True,
+                secure=not settings.DEBUG,
                samesite='None',
                 max_age=3600
             )
@@ -453,7 +453,7 @@ class FacebookLoginView(GenericAPIView):
                 key='refresh_token',
                 value=refresh_token,
                 httponly=True,
-                secure = True,
+                secure=not settings.DEBUG,
                samesite='None',
                 max_age=7*24*60*60,
                 path='/'
@@ -552,9 +552,10 @@ class LogoutView(APIView):
                 pass  # Optional: log invalid token
 
         response = Response({'message': 'Logged out successfully'}, status=status.HTTP_200_OK)
-        response.delete_cookie('access_token', path='/')
-        response.delete_cookie('refresh_token', path='/')
-        response.delete_cookie('csrftoken',path='/')
+        response.delete_cookie('access_token', path='/', secure=True, samesite='None')
+        response.delete_cookie('refresh_token', path='/', secure=True, samesite='None')
+        response.delete_cookie('csrftoken', path='/', secure=True, samesite='None')
+
         return response
     
 
