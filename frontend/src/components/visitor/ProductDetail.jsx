@@ -58,10 +58,12 @@ useEffect(() => {
     const params = new URLSearchParams(location.search);
     const ref = params.get("ref");
     if (ref) {
+      console.log("[DEBUG] Click Tracking - Storing ref in localStorage & sessionStorage:", ref);
       localStorage.setItem(CLICK_REF_KEY, ref);       // for click tracking
       sessionStorage.setItem(PURCHASE_REF_KEY, ref);  // for Buy Now / Checkout
     }
   }, [location.search]);
+
 
 
   const toSlug = (text) =>
@@ -161,7 +163,8 @@ useEffect(() => {
     // ❌ DO NOT use sessionStorage referral here  
     //    Cart items should only take referral from URL when added
     const params = new URLSearchParams(location.search);
-    const ref = params.get('ref');   // Only take from URL
+    const ref = params.get('ref');
+    console.log("[DEBUG] Add to Cart - Using referral_code:", ref);
 
     const index = cart.findIndex(item => item.product_variant_id === variantId);
 
@@ -207,8 +210,8 @@ useEffect(() => {
 
 const handleBuyNow = () => {
   if (!selectedVariant) return toast.error("Select a variant first");
-  const buyNowRef = sessionStorage.getItem(PURCHASE_REF_KEY) || null;
-  
+  const buyNowRef = sessionStorage.getItem(PURCHASE_REF_KEY) || new URLSearchParams(location.search).get('ref');
+  console.log("[DEBUG] Buy Now - Using referral_code:", buyNowRef);
   const minimalPayload = [{
     product_variant_id: selectedVariant.id,
     quantity,

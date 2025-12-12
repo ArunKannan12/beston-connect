@@ -290,9 +290,9 @@ useEffect(() => {
   try {
     const endpoint = isBuyNowFlow ? "checkout/buy-now/" : "checkout/cart/";
    
-    const referralCode = sessionStorage.getItem("referral_code") || "";
+    const referralCode = sessionStorage.getItem("purchase_referral_code") || "";
     console.log(referralCode,'ref code');
-      console.log(itemsToUse,'item to use');
+    console.log(itemsToUse,'item to use');
       
     const payload = {
         items: itemsToUse.map((i) => ({
@@ -337,12 +337,11 @@ useEffect(() => {
           if (isBuyNowFlow) {
             sessionStorage.removeItem(BUY_NOW_KEY);
             sessionStorage.removeItem("BUY_NOW_ACTIVE");
-            sessionStorage.removeItem('referral_code')
+            sessionStorage.removeItem('purchase_referral_code')
             setBuyNowItems([]);
           }
           navigate(`/orders/${orderNumber}/`);
         },
-        onOpen: () => setIsPlacingOrder(true),
         onClose: () => setIsPlacingOrder(false),
       });
       return;

@@ -149,10 +149,22 @@ class PromoterSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
-        user=self.context['request'].user
-        if Promoter.objects.filter(user=user).exists() and not getattr(self.instance,'id',None):
-            raise serializers.ValidationError({'non_field_errors':'you are already registered as a promoter'})
+        user = self.context['request'].user
+        instance = getattr(self, 'instance', None)
+
+        # Prevent duplicate promoter registration
+        if Promoter.objects.filter(user=user).exists() and not getattr(instance, 'id', None):
+            raise serializers.ValidationError({'non_field_errors': 'You are already registered as a promoter'})
+
+        # Ensure bank account number is unique across promoters
+        bank_account = attrs.get('bank_account_number', getattr(instance, 'bank_account_number', None))
+
+        qs = Promoter.objects.exclude(pk=getattr(instance, 'pk', None))
+        if bank_account and qs.filter(bank_account_number=bank_account).exists():
+            raise serializers.ValidationError({'bank_account_number': 'This bank account is already registered for another promoter.'})
+
         return attrs
+
 
     def get_referral_link(self, obj):
         if hasattr(obj, 'referral_code'):

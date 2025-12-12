@@ -125,43 +125,52 @@ const BecomePromoterPage = () => {
         await fetchProfile()
         navigate("/promoter/dashboard", { state: { promoterType: "unpaid" } });
       } else {
-         const { data } = await axiosInstance.post("/promoter/become-premium/", formData);
-       
+         const referral_code = localStorage.getItem("referral_code");
+         const paidPayload = { ...formData };
+
+         if (referral_code) paidPayload.referral_code = referral_code;
+
+         const { data } = await axiosInstance.post("/promoter/become-premium/", paidPayload);
+
         const options = {
-          key: data.key,
-          amount: data.amount,
+          key: import.meta.env.VITE_RAZORPAY_KEY_ID,
+          amount: data.amount * 100,
           currency: data.currency,
-          order_id: data.order_id,
+          order_id: data.razorpay_order_id,
           name: user ? `${user.first_name} ${user.last_name}` : formData.account_holder_name,
           description: "Premium Promoter Registration",
+
           handler: async (paymentResult) => {
             try {
+              const referral_code = localStorage.getItem("referral_code");
+
               const verifyRes = await axiosInstance.post("/promoter/verify-premium-payment/", {
-                payment_id: paymentResult.razorpay_payment_id,
-                order_id: paymentResult.razorpay_order_id,
-                signature: paymentResult.razorpay_signature,
+                razorpay_payment_id: paymentResult.razorpay_payment_id,
+                razorpay_order_id: paymentResult.razorpay_order_id,
+                razorpay_signature: paymentResult.razorpay_signature,
+                referral_code: referral_code || null,
+                ...formData,
               });
-              
-              setMessage({
-                type: "success",
-                text: "Premium Promoter registration successful!",
-              });
-              localStorage.removeItem('referral_code')
-              await fetchProfile()
+
+              toast.success("Premium Promoter registration successful!");
+              localStorage.removeItem("referral_code");
+              await fetchProfile();
               navigate("/promoter/dashboard", { state: { promoterType: "paid" } });
-            } catch (verifyError) {
-               setMessage({
-                type: "error",
-                text: "Payment verification failed. Please contact support.",
-              });
+
+            } catch (err) {
+              console.log(err);
+              toast.error("Payment verification failed. Please contact support.");
             }
           },
-           prefill: {
+
+          prefill: {
             name: formData.account_holder_name || `${user.first_name} ${user.last_name}`,
             contact: user?.phone_number || "",
           },
+
           theme: { color: "#2563eb" },
         };
+
 
          const rzp = new window.Razorpay(options);
         rzp.open();

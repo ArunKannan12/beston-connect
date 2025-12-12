@@ -93,40 +93,45 @@ class BecomePromoterAPIView(CreateAPIView):
 
         # 1️⃣ Check if user is already a promoter
         if hasattr(user, 'promoter'):
+            serializer = PromoterSerializer(user.promoter, context={'request': request})
             return Response(
                 {
                     "detail": "You are already a promoter",
-                    "promoter_profile": PromoterSerializer(
-                        user.promoter,
-                        context={'request':request}
-                        ).data,
+                    "promoter_profile": serializer.data,
                     "active_role": user.active_role,
                     "roles": list(user.user_roles.values_list("role__name", flat=True)),
                 },
                 status=status.HTTP_200_OK,
             )
-            
-        # 3️⃣ Handle referral code0
-        ref_code = (request.data.get('referral_code') or request.query_params.get('ref') or request.session.get('referral_code'))
+
+        # 2️⃣ Handle referral code
+        ref_code = (
+            request.data.get('referral_code') or
+            request.query_params.get('ref') or
+            request.session.get('referral_code')
+        )
         referred_by = None
         if ref_code:
-            try:
-                referred_by = Promoter.objects.get(referral_code=ref_code)
-            except Promoter.DoesNotExist:
-                referred_by = None
+            referred_by = Promoter.objects.filter(referral_code=ref_code).first()
 
         # Clear session referral if used
-        request.session.pop('referral_code',None)
+        request.session.pop('referral_code', None)
 
-        # 2️⃣ Assign roles
-        user.assign_role("promoter", set_active=True,referred_by=referred_by)
-        user.assign_role("customer")  # keep customer role assigned but not active
+        # 3️⃣ Create Promoter instance first
+        promoter = Promoter.objects.create(
+            user=user,
+            referred_by=referred_by,
+            promoter_type='unpaid',  # free promoter by default
+        )
 
-        
-        # 5️⃣ Serialize and save updates from request
-        serializer = self.get_serializer(user.promoter, data=request.data, partial=True)
+        # 4️⃣ Serialize and save additional data (bank, account, etc.)
+        serializer = self.get_serializer(promoter, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save(user=user)
+
+        # 5️⃣ Assign roles
+        user.assign_role("promoter", set_active=True, referred_by=referred_by)
+        user.assign_role("customer")  # keep customer role but not active
 
         return Response(
             {
@@ -137,7 +142,6 @@ class BecomePromoterAPIView(CreateAPIView):
             },
             status=status.HTTP_201_CREATED,
         )
-
 
 
 # --- Retrieve / Update / Delete Promoter ---
@@ -342,20 +346,15 @@ class BecomePremiumPromoterAPIView(APIView):
 
     def post(self, request):
         user = request.user
-        try:
-            promoter = Promoter.objects.get(user=user)
-        except Promoter.DoesNotExist:
-            return Response(
-                {"detail": "You are not a promoter yet."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
 
-        if promoter.promoter_type == 'paid':
+        promoter = Promoter.objects.filter(user=user).first()
+        if promoter and promoter.promoter_type == "paid":
             return Response(
                 {"detail": "You are already a premium promoter."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        
         # Get the latest active premium settings
         premium = PremiumSettings.objects.filter(active=True).order_by('-updated_at').first()
         if not premium:
@@ -373,7 +372,7 @@ class BecomePremiumPromoterAPIView(APIView):
         order_data = {
             "amount": payment_amount_paise,
             "currency": "INR",
-            "receipt": f"premium_promoter_{promoter.id}_{timezone.now().timestamp()}",
+            "receipt": f"premium_promoter_{user.id}_{timezone.now().timestamp()}",
             "payment_capture": 1
         }
 
@@ -383,24 +382,22 @@ class BecomePremiumPromoterAPIView(APIView):
             "razorpay_order_id": razorpay_order["id"],
             "amount": amount_to_charge,
             "currency": "INR",
-            "promoter_id": promoter.id
+            "promoter_exists": promoter is not None
         }, status=status.HTTP_200_OK)
-
+    
+ 
 class VerifyPremiumPaymentAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
         user = request.user
-        try:
-            promoter = Promoter.objects.get(user=user)
-        except Promoter.DoesNotExist:
-            return Response({"detail": "Promoter not found"}, status=status.HTTP_400_BAD_REQUEST)
-
         data = request.data
+
         required_fields = ["razorpay_payment_id", "razorpay_order_id", "razorpay_signature"]
         if not all(field in data for field in required_fields):
             return Response({"detail": "Incomplete payment data"}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Verify Razorpay signature
         client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
         try:
             client.utility.verify_payment_signature({
@@ -411,10 +408,30 @@ class VerifyPremiumPaymentAPIView(APIView):
         except razorpay.errors.SignatureVerificationError:
             return Response({"detail": "Payment verification failed"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Payment successful → upgrade promoter
+        # Referral handling
+        ref_code = data.get('referral_code') or request.query_params.get('ref') or request.session.get('referral_code')
+        referred_by = Promoter.objects.filter(referral_code=ref_code).first() if ref_code else None
+        request.session.pop('referral_code', None)
+
+        promoter, created = Promoter.objects.get_or_create(user=user, defaults={
+            'promoter_type': 'paid',
+            'premium_activated_at': timezone.now(),
+            'referred_by': referred_by
+        })
+
+        # Update existing or new promoter with bank/account details
         promoter.promoter_type = 'paid'
         promoter.premium_activated_at = timezone.now()
+        promoter.referred_by = referred_by
+        promoter.bank_account_number = data.get('bank_account_number', promoter.bank_account_number)
+        promoter.ifsc_code = data.get('ifsc_code', promoter.ifsc_code)
+        promoter.bank_name = data.get('bank_name', promoter.bank_name)
+        promoter.account_holder_name = data.get('account_holder_name', promoter.account_holder_name)
         promoter.save()
+
+        # Assign roles
+        user.assign_role("promoter", set_active=True, referred_by=referred_by)
+        user.assign_role("customer")
 
         return Response({"detail": "Promoter upgraded to premium!"}, status=status.HTTP_200_OK)
 
@@ -654,15 +671,22 @@ class UnpaidPromoterDashboardAPIView(APIView):
             "monthly_revenue_graph": list(monthly_revenue),
         })
 
+
 class AvailableProductsForPromotionAPIView(APIView):
     permission_classes = [IsAuthenticated, IsPromoter]
 
     def get(self, request):
         promoter = request.user.promoter
+        is_paid = promoter.promoter_type == "paid"
+        now = timezone.now()
+        last_30_days = now - timedelta(days=30)
 
         # Already promoted product IDs
-        promoted_ids = PromotedProduct.objects.filter(promoter=promoter)\
-                                              .values_list("product_variant_id", flat=True)
+        promoted_ids = PromotedProduct.objects.filter(promoter=promoter).values_list(
+            "product_variant_id", flat=True
+        )
+
+        # Get available variants
         available_variants = ProductVariant.objects.exclude(id__in=promoted_ids)
 
         serializer = ProductVariantSerializer(
@@ -670,45 +694,49 @@ class AvailableProductsForPromotionAPIView(APIView):
         )
 
         data = []
-        is_paid = promoter.promoter_type == "paid"
-        now = timezone.now()
-        last_30_days = now - timedelta(days=30)
+
+        # Pre-fetch sales data to reduce queries
+        sales_30d = (
+            OrderItem.objects.filter(
+                product_variant__in=available_variants,
+                order__status='delivered',
+                order__created_at__gte=last_30_days
+            )
+            .values('product_variant')
+            .annotate(total=Sum('quantity'))
+        )
+        sales_30d_dict = {item['product_variant']: item['total'] for item in sales_30d}
+
+        sales_all_time = (
+            OrderItem.objects.filter(
+                product_variant__in=available_variants,
+                order__status='delivered'
+            )
+            .values('product_variant')
+            .annotate(total=Sum('quantity'))
+        )
+        sales_all_dict = {item['product_variant']: item['total'] for item in sales_all_time}
 
         for variant_data, variant in zip(serializer.data, available_variants):
-            if is_paid:
-                # --- Commission ---
-                commission_rate = getattr(variant, 'promoter_commission_rate', 5)  # default 5%
-                potential_commission = float(variant.final_price) * (commission_rate / 100)
+            # Everyone can see stock
+            variant_data["stock_available"] = getattr(variant, 'stock', 0)
 
-                # --- Projected earnings based on last 30 days sales ---
-                total_sales_30d = OrderItem.objects.filter(
-                    product_variant=variant,
-                    order__status='delivered',
-                    order__created_at__gte=last_30_days
-                ).aggregate(total=Sum('quantity'))['total'] or 0
+            if is_paid:
+                commission_rate = getattr(variant, 'promoter_commission_rate', 5)  # default 5%
+                potential_commission = Decimal(variant.final_price) * (Decimal(commission_rate) / Decimal(100))
+
+                total_sales_30d = sales_30d_dict.get(variant.id, 0)
                 projected_earning = potential_commission * total_sales_30d
 
-                # --- Badges ---
-                total_sales_all_time = OrderItem.objects.filter(
-                    product_variant=variant,
-                    order__status='delivered'
-                ).aggregate(total=Sum('quantity'))['total'] or 0
+                total_sales_all_time = sales_all_dict.get(variant.id, 0)
 
-                top_selling_badge = total_sales_all_time >= 100
-                trending_badge = total_sales_30d >= 20
-                new_arrival_badge = (timezone.now() - variant.created_at).days <= 30
-               
                 variant_data.update({
-                    "potential_commission": round(potential_commission, 2),
-                    "projected_earning": round(projected_earning, 2),
-                    "top_selling_badge": top_selling_badge,
-                    "trending_badge": trending_badge,
-                    "new_arrival_badge": new_arrival_badge,
-                    
+                    "potential_commission": float(round(potential_commission, 2)),
+                    "projected_earning": float(round(projected_earning, 2)),
+                    "top_selling_badge": total_sales_all_time >= 100,
+                    "trending_badge": total_sales_30d >= 20,
+                    "new_arrival_badge": (now - variant.created_at).days <= 30,
                 })
-
-            # Everyone can see stock info
-            variant_data["stock_available"] = getattr(variant, 'stock', 0)
 
             data.append(variant_data)
 
@@ -754,7 +782,8 @@ class PaidPromoterDashboardAPIView(APIView):
 
         # --- PERFORMANCE ---
         promoted_products = PromotedProduct.objects.filter(promoter=promoter).count()
-        total_referrals = order_items.count()
+        total_referrals = (order_items.values("order").distinct().count())
+
         successful_orders = (
             order_items.filter(order__status="delivered")
             .values("order").distinct().count()

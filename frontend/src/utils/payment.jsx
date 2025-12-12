@@ -2,7 +2,7 @@ import axiosInstance from "../api/axiosinstance";
 import { toast } from "react-toastify";
 
 /* ------------------------------
- * Load Razorpay dynamically
+ * Load Razorpay SDK dynamically
  * ------------------------------ */
 const loadRazorpayScript = () =>
   new Promise((resolve, reject) => {
@@ -15,7 +15,7 @@ const loadRazorpayScript = () =>
   });
 
 /* ------------------------------
- * Cleanup helper
+ * Cleanup Razorpay session
  * ------------------------------ */
 const cleanupRazorpaySession = () => {
   try {
@@ -30,7 +30,7 @@ const cleanupRazorpaySession = () => {
 };
 
 /* ------------------------------
- * Main payment handler (SAFE)
+ * Main Razorpay payment handler
  * ------------------------------ */
 export const handleRazorpayPayment = async ({
   razorpay_order_id,
@@ -39,12 +39,12 @@ export const handleRazorpayPayment = async ({
   razorpay_key,
   orderNumber,
   onSuccess,
-  onOpen,
   onClose,
 }) => {
+  if (!razorpay_order_id) throw new Error("Razorpay order ID is required");
+
   try {
     await loadRazorpayScript();
-    if (!razorpay_order_id) throw new Error("Razorpay order ID is required");
 
     return new Promise((resolve, reject) => {
       const options = {
@@ -64,6 +64,7 @@ export const handleRazorpayPayment = async ({
               order_number: orderNumber,
             };
 
+            // Verify payment with backend
             await axiosInstance.post("orders/razorpay/verify/", payload);
 
             toast.success("Payment successful & verified ✅");
@@ -94,11 +95,8 @@ export const handleRazorpayPayment = async ({
         theme: { color: "#3399cc" },
       };
 
+      // Initialize and open Razorpay checkout
       const rzp = new window.Razorpay(options);
-
-      // UI lock hook
-      onOpen?.();
-
       rzp.open();
     });
   } catch (err) {
