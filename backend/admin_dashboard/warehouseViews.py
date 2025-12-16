@@ -94,7 +94,6 @@ def create_delhivery_pickup_request(
 
     pickup_request = DelhiveryPickupRequest.objects.create(
         pickup_date=pickup_date,
-        pickup_time=pickup_time,
         pickup_location=location_name,
         expected_package_count=expected_package_count,
         delhivery_request_id=data.get("request_id"),

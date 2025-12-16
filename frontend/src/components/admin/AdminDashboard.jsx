@@ -10,6 +10,7 @@ import {
   Image as BannerIcon,
   Menu,
   Megaphone,
+  WarehouseIcon,
   X,
 } from "lucide-react";
 
@@ -47,9 +48,18 @@ const adminSections = [
     subLinks: [
       { name: "All Orders", to: "/admin/orders" },
       { name: "Returns", to: "/admin/returns" },
-      {name:"Replacements",to:"/admin/replacements"}
+      {name:"Replacements",to:"/admin/replacements"},
+      {name: "Delhivery Pickup Requests", to: "/admin/delhivery-pickup-requests"}
+
     ],
   },
+  // {
+  //   label: "Warehouses",
+  //   icon: WarehouseIcon, // choose any icon you use (e.g., Home, Building, Store)
+  //   subLinks: [
+  //     { name: "All Warehouses", to: "/admin/warehouses" },
+  //   ],
+  // },
   { label: "Banners", to: "/admin/banners", icon: BannerIcon },
 ];
 

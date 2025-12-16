@@ -19,6 +19,9 @@ const AdminDashboardHome = lazy(() => import('../components/admin/pages/AdminDas
 const AdminPromoters =lazy(()=>import("../components/admin/pages/AdminPromoters.jsx")) ;
 const AdminCommissionLevel = lazy(()=>import("../components/admin/pages/AdminCommissionLevel.jsx")) ;
 const AdminPremiumSettings = lazy(()=>import("../components/admin/pages/AdminPremiumSettings.jsx")) ;
+const PickupRequestPage = lazy(()=>import("../components/admin/pages/PickupRequest.jsx")) ;
+// const AdminWarehouse = lazy(()=>import('../components/admin/pages/AdminWarehouse.jsx'))
+
 const AdminPromoterWithdrwalRequest = lazy(()=>import("../components/admin/pages/AdminPromoterWithdrwalRequest.jsx"));
 const Wallet = lazy(()=>import("../components/promoter/Paid/Wallet.jsx"));
 // 🔄 Lazy-loaded Visitor/Customer components
@@ -153,6 +156,9 @@ export const router = createBrowserRouter([
           {path:"premium-settings",element:withSuspense(<AdminPremiumSettings/>)},
           {path:"commission-levels",element:withSuspense(<AdminCommissionLevel/>)},
           {path:"withdrawal-requests",element:withSuspense(<AdminPromoterWithdrwalRequest/>)},
+          {path:"delhivery-pickup-requests",element:withSuspense(<PickupRequestPage/>)},
+          // {path:"warehouses",element:withSuspense(<AdminWarehouse/>)},
+
         ],
       },
       { path: "/profile", element: withSuspense(<Profile />) },

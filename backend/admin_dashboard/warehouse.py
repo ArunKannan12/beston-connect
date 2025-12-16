@@ -79,6 +79,9 @@ class DelhiveryPickupRequest(models.Model):
     slot = models.CharField(max_length=10, choices=PICKUP_SLOT_CHOICES)
     expected_package_count = models.PositiveIntegerField()
 
+    # ✅ Required by Delhivery API
+    pickup_location = models.CharField(max_length=255, db_index=True)
+
     delhivery_request_id = models.CharField(max_length=100, blank=True, null=True)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="OPEN", db_index=True)
     raw_response = models.JSONField(blank=True, null=True)
@@ -86,11 +89,8 @@ class DelhiveryPickupRequest(models.Model):
 
     class Meta:
         ordering = ["-pickup_date"]
-
-    def __str__(self):
-        return f"{self.get_slot_display()} Pickup on {self.pickup_date} ({self.expected_package_count} packages)"
+        unique_together = ("pickup_date", "slot", "pickup_location")  # ✅ Prevent duplicates
 
     @property
     def pickup_time(self):
-        # Use self.PICKUP_SLOTS to reference the class attribute
         return self.PICKUP_SLOTS[self.slot]

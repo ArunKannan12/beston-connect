@@ -118,6 +118,7 @@ from rest_framework import serializers
 from datetime import date, timedelta
 from orders.models import Order, OrderStatus
 from .warehouse import DelhiveryPickupRequest
+from django.conf import settings
 
 class DelhiveryPickupRequestSerializer(serializers.ModelSerializer):
     slot = serializers.ChoiceField(choices=DelhiveryPickupRequest.PICKUP_SLOT_CHOICES)
@@ -137,11 +138,13 @@ class DelhiveryPickupRequestSerializer(serializers.ModelSerializer):
             "status",
             "delhivery_request_id",
             "order_numbers",  # new field
+            "pickup_location",  
         ]
         read_only_fields = [
             
             "status",
             "delhivery_request_id",
+            "pickup_location",  
         ]
 
     def validate_pickup_date(self, value):
@@ -165,6 +168,45 @@ class DelhiveryPickupRequestSerializer(serializers.ModelSerializer):
                 f"The following orders are not eligible for pickup: {list(invalid_orders)}"
             )
         return value
+    def validate(self, attrs):
+        pickup_date = attrs["pickup_date"]
+        slot = attrs["slot"]
+        pickup_location = settings.DELHIVERY_PICKUP["name"]
+
+        # Prevent duplicate open pickup requests
+        if DelhiveryPickupRequest.objects.filter(
+            pickup_date=pickup_date,
+            slot=slot,
+            pickup_location=pickup_location,
+            status="OPEN",
+        ).exists():
+            raise serializers.ValidationError(
+                "An open pickup request already exists for this date and slot."
+            )
+
+        return attrs
+
+    # -----------------------------
+    # CREATE LOGIC
+    # -----------------------------
+
+    def create(self, validated_data):
+        order_numbers = validated_data.pop("order_numbers")
+
+        # Inject pickup location from settings
+        validated_data["pickup_location"] = settings.DELHIVERY_PICKUP["name"]
+
+        # Create pickup request
+        pickup_request = super().create(validated_data)
+
+        # Attach orders to this pickup request
+        Order.objects.filter(order_number__in=order_numbers).update(
+            pickup_request=pickup_request
+        )
+
+        return pickup_request
+
+
 
 
 from orders.models import Order
@@ -177,7 +219,7 @@ class PickupRequestOrderSerializer(serializers.ModelSerializer):
         fields = ["id", "order_number", "user_email", "status", "total"]
 
 class DelhiveryPickupRequestDetailSerializer(serializers.ModelSerializer):
-    orders = PickupRequestOrderSerializer(many=True, read_only=True)  # uses related_name="orders"
+    orders = PickupRequestOrderSerializer(many=True, read_only=True)
 
     class Meta:
         model = DelhiveryPickupRequest
@@ -186,6 +228,7 @@ class DelhiveryPickupRequestDetailSerializer(serializers.ModelSerializer):
             "pickup_date",
             "slot",
             "expected_package_count",
+            "pickup_location",
             "status",
             "delhivery_request_id",
             "orders",
@@ -218,5 +261,4 @@ class OrderPickupListSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_customer_name(self, obj):
-        # Adjust if you store name differently
         return f"{obj.user.first_name} {obj.user.last_name}".strip()
