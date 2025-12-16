@@ -22,6 +22,7 @@ from .views import (
                     DelhiveryWebhookAPIView,
                     )
 from orders.returnReplacement import ReturnRequestUpdateAPIView,ReplacementRequestUpdateAPIView,ReturnRequestDetailAPIView,ReturnRequestRefundAPIView
+from .warehouseViews import CreateDelhiveryPickupRequestAPIView,DelhiveryPickupRequestListAPIView,EligibleOrdersForPickupAPIView
 
 urlpatterns = [
     path("dashboard-stats/", AdminDashboardStatsAPIView.as_view(), name="admin-dashboard-stats"),
@@ -50,6 +51,23 @@ urlpatterns = [
     path("admin/banners/<int:pk>/", BannerUpdateDestroyAPIView.as_view(), name="banner-update-destroy"),
    
     path("webhook/delhivery/", DelhiveryWebhookAPIView.as_view(), name="delhivery-webhook"),
+
+    # path("warehouses/list/", WarehouseListView.as_view(), name="warehouse-list"),
+    # path("warehouses/", WarehouseCreateView.as_view(), name="warehouse-create"),
+
+    # # Update an existing warehouse + sync to Delhivery
+    # path("warehouses/<int:pk>/", WarehouseUpdateView.as_view(), name="warehouse-update"),
+
+    # # Deactivate a warehouse (local + sync to Delhivery)
+    # path("warehouses/<int:pk>/deactivate/", WarehouseDeactivateView.as_view(), name="warehouse-deactivate"),
+    path(
+        "delhivery/pickup-request/create/",
+        CreateDelhiveryPickupRequestAPIView.as_view(),
+        name="create-delhivery-pickup-request"
+    ),
+    path("delhivery/pickup-requests/", DelhiveryPickupRequestListAPIView.as_view(), name="pickup-request-list"),
+    path("delhivery/eligible-for-pickup/", EligibleOrdersForPickupAPIView.as_view(), name="order-for-picking-list"),
+    
 ]
 
 

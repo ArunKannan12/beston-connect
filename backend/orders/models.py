@@ -42,7 +42,6 @@ class ShippingAddress(models.Model):
 class OrderStatus(models.TextChoices):
     PENDING = 'pending', 'Pending'
     PROCESSING = 'processing', 'Processing'
-    PICKED = 'picked', 'Picked'
     IN_TRANSIT = 'in_transit', 'In Transit'
     OUT_FOR_DELIVERY = 'out_for_delivery', 'Out for Delivery'
     DELIVERED = 'delivered', 'Delivered'
@@ -65,7 +64,7 @@ def generate_order_number():
         if not Order.objects.filter(order_number=number).exists():
             return number
 
-
+from admin_dashboard.warehouse import DelhiveryPickupRequest
 # ---------------- Order ----------------
 class Order(models.Model):
     # --- Basic Info ---
@@ -106,7 +105,16 @@ class Order(models.Model):
     shipped_at = models.DateTimeField(null=True, blank=True)
     handoff_timestamp = models.DateTimeField(null=True, blank=True)
     delivered_at = models.DateTimeField(null=True, blank=True)
+    
+    pickup_request = models.ForeignKey(
+        DelhiveryPickupRequest,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="orders"
+    )
 
+    packed_at = models.DateTimeField(null=True, blank=True)
     # --- Meta ---
     order_number = models.CharField(max_length=20, unique=True, editable=False, null=True, blank=True)
     checkout_session_id=models.CharField(max_length=100,null=True,blank=True,db_index=True,help_text="Unique identifier to link retries or failed payment sessions")
@@ -154,7 +162,6 @@ class Order(models.Model):
 class OrderItemStatus(models.TextChoices):
     PENDING = 'pending', 'Pending'
     PROCESSING = 'processing', 'Processing'
-    PICKED = 'picked', 'Picked'
     IN_TRANSIT = 'in_transit', 'In Transit'
     OUT_FOR_DELIVERY = 'out_for_delivery', 'Out for Delivery'
     DELIVERED = 'delivered', 'Delivered'

@@ -983,4 +983,3 @@ def apply_return_recovery(user, order, delivery_charge, max_recovery=Decimal('10
     delivery_charge += applied
 
     return delivery_charge, applied
-

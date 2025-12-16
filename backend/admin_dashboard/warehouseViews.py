@@ -1,0 +1,348 @@
+import json
+import logging
+import requests
+from datetime import date, time
+from django.conf import settings
+from .warehouse import DelhiveryPickupRequest
+from rest_framework.generics import ListAPIView
+logger = logging.getLogger(__name__)
+from orders.utils import create_delhivery_shipment
+
+
+DELHIVERY_PICKUP_URL = "https://track.delhivery.com/fm/request/new/"
+
+PICKUP_SLOTS = {
+    "midday": time(10, 0, 0),  # 10:00:00 start
+    "evening": time(14, 0, 0), # 14:00:00 start
+}
+
+def create_delhivery_pickup_request(
+    pickup_date: date,
+    slot: str,
+    expected_package_count: int
+) -> dict:
+    """
+    Creates a Delhivery pickup request for a fixed slot and saves it in DB.
+    
+    Args:
+        pickup_date: The date of pickup.
+        slot: 'midday' or 'evening'.
+        expected_package_count: Number of packages expected for pickup.
+    
+    Returns:
+        dict with success, pickup_request_id, delhivery_request_id, status, and raw data.
+    """
+    if slot not in PICKUP_SLOTS:
+        return {"success": False, "error": f"Invalid slot. Choose from {list(PICKUP_SLOTS.keys())}"}
+
+    pickup_time = PICKUP_SLOTS[slot]
+    pickup_location = getattr(settings, "DELHIVERY_PICKUP", None)
+
+    if not pickup_location:
+        return {"success": False, "error": "DELHIVERY_PICKUP not configured in settings."}
+
+    payload = {
+        "pickup_date": pickup_date.strftime("%Y-%m-%d"),
+        "pickup_time": pickup_time.strftime("%H:%M:%S"),
+        "pickup_location": pickup_location["name"],
+        "expected_package_count": expected_package_count,
+        "client_code": getattr(settings, "DELHIVERY_CLIENT_CODE", ""),
+    }
+
+    headers = {
+        "Authorization": f"Token {settings.DELHIVERY_API_TOKEN}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    try:
+        response = requests.post(DELHIVERY_PICKUP_URL, headers=headers, data=json.dumps(payload), timeout=20)
+        response.raise_for_status()
+        data = response.json()
+    except requests.exceptions.RequestException as e:
+        logger.exception("Delhivery pickup request failed")
+        return {"success": False, "error": str(e)}
+    except ValueError:
+        logger.warning(f"Invalid JSON response from Delhivery: {response.text}")
+        return {"success": False, "error": "Invalid JSON response"}
+
+    # Save the pickup request in DB
+    pickup_request = DelhiveryPickupRequest.objects.create(
+        pickup_date=pickup_date,
+        pickup_time=pickup_time,
+        expected_package_count=expected_package_count,
+        delhivery_request_id=data.get("request_id"),
+        status="OPEN" if data.get("status") == "OPEN" else "FAILED",
+        raw_response=data,
+        slot=slot,  # store slot for easier filtering
+    )
+
+    return {
+        "success": True,
+        "pickup_request_id": pickup_request.id,
+        "delhivery_request_id": pickup_request.delhivery_request_id,
+        "status": pickup_request.status,
+        "data": data,
+    }
+
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from .warehouseSerializer import DelhiveryPickupRequestSerializer,DelhiveryPickupRequestDetailSerializer,OrderPickupListSerializer
+from accounts.permissions import IsAdmin
+from orders.models import Order,OrderStatus
+from django.db import transaction
+
+class EligibleOrdersForPickupAPIView(ListAPIView):
+    permission_classes=[IsAdmin]
+    serializer_class=OrderPickupListSerializer
+    
+    def get_queryset(self):
+        return Order.objects.filter(
+            status=OrderStatus.PROCESSING,
+            is_paid=True,
+            pickup_request__isnull=True,
+            waybill__isnull=False
+        ).order_by('-created_at')
+    
+
+
+class CreateDelhiveryPickupRequestAPIView(APIView):
+    permission_classes = [IsAdmin]
+
+    def post(self, request):
+        serializer = DelhiveryPickupRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        pickup_date = serializer.validated_data["pickup_date"]
+        slot = serializer.validated_data["slot"]
+        expected_package_count = serializer.validated_data["expected_package_count"]
+        order_numbers = serializer.validated_data.get("order_numbers", [])
+
+        if not order_numbers:
+            return Response({"error": "No orders specified for pickup."}, status=400)
+
+        # 1️⃣ Create pickup request in Delhivery
+        result = create_delhivery_pickup_request(
+            pickup_date=pickup_date,
+            slot=slot,
+            expected_package_count=expected_package_count
+        )
+
+        if not result.get("success"):
+            logger.error(f"Delhivery pickup creation failed: {result}")
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+
+        pickup_request_id = result["pickup_request_id"]
+
+        # 2️⃣ Link eligible orders and create shipments
+        eligible_orders = Order.objects.filter(
+            id__in=order_numbers,
+            status=OrderStatus.PROCESSING,
+            is_paid=True,
+            pickup_request__isnull=True
+        )
+        shipment_results = []
+        linked_orders_count = 0
+
+        with transaction.atomic():
+            for order in eligible_orders:
+                try:
+                    # Link the order to pickup request
+                    order.pickup_request_id = pickup_request_id
+                    order.save(update_fields=["pickup_request"])
+                    
+                    linked_orders_count += 1
+
+                    shipment_results.append({
+                        "order_number": order.order_number,
+                        "waybill": order.waybill,
+                        "tracking_url": order.tracking_url,
+                        "success": True,
+                    })
+
+                except Exception as e:
+                    logger.exception(f"Failed to create shipment for order {order.order_number}")
+                    shipment_results.append({
+                        "order_number": order.order_number,
+                        "success": False,
+                        "error": str(e),
+                    })
+
+        return Response(
+            {
+                "success": True,
+                "pickup_request_id": pickup_request_id,
+                "linked_orders_count": linked_orders_count,
+                "delhivery_request_id": result.get("delhivery_request_id"),
+                "status": result.get("status"),
+                "data": result.get("data"),
+                "shipments": shipment_results,
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+
+class DelhiveryPickupRequestListAPIView(ListAPIView):
+    queryset = DelhiveryPickupRequest.objects.all().order_by("-created_at")
+    serializer_class = DelhiveryPickupRequestDetailSerializer
+    permission_classes = [IsAdmin]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# DELHIVERY_WAREHOUSE_URL = "https://track.delhivery.com/api/backend/clientwarehouse"
+
+# def sync_warehouse_to_delhivery(warehouse, create=False):
+#     url = f"{DELHIVERY_WAREHOUSE_URL}/create/" if create else f"{DELHIVERY_WAREHOUSE_URL}/edit/"
+
+#     payload = {
+#         "name": warehouse.name,
+#         "phone": warehouse.phone,
+#         "email": warehouse.email,
+#         "address": warehouse.address,
+#         "city": warehouse.city,
+#         "pin": warehouse.pin,
+#         "country": warehouse.country,
+
+#         "return_address": warehouse.return_address,
+#         "return_city": warehouse.return_city,
+#         "return_pin": warehouse.return_pin,
+#         "return_state": warehouse.return_state,
+#         "return_country": warehouse.return_country,
+#     }
+
+#     headers = {
+#         "Authorization": f"Token {settings.DELHIVERY_API_TOKEN}",
+#         "Content-Type": "application/json",
+#         "Accept": "application/json",
+#     }
+
+#     # ✅ DEBUG LOGS
+#     print("\n--- DELHIVERY SYNC DEBUG ---")
+#     print("URL:", url)
+#     print("PAYLOAD:", payload)
+#     print("HEADERS:", {k: ('***' if k == 'Authorization' else v) for k, v in headers.items()})
+
+#     response = requests.post(url, json=payload, headers=headers)
+
+#     print("STATUS CODE:", response.status_code)
+#     print("RESPONSE HEADERS:", dict(response.headers))
+#     print("RAW RESPONSE TEXT:", response.text)
+#     print("--- END DEBUG ---\n")
+
+#     # ✅ Safe JSON parsing
+#     try:
+#         data = response.json()
+#     except ValueError:
+#         data = {
+#             "success": False,
+#             "error": "Invalid JSON response from Delhivery",
+#             "raw": response.text,
+#             "status": response.status_code,
+#         }
+
+#     warehouse.delhivery_synced = data.get("success", False)
+#     warehouse.last_sync_message = (
+#         data.get("data", {}).get("message")
+#         or data.get("error")
+#         or "No message"
+#     )
+#     warehouse.last_synced_at = timezone.now()
+#     warehouse.save()
+
+#     return data
+
+# class WarehouseListView(generics.ListAPIView):
+#     serializer_class = WarehouseListSerializer
+#     permission_classes = [IsAdmin]
+
+#     queryset = Warehouse.objects.filter(is_deleted=False)
+#     filter_backends = [
+#         DjangoFilterBackend,
+#         filters.SearchFilter,
+#         filters.OrderingFilter,
+#     ]
+#     search_fields = [
+#         "name",
+#         "city",
+#         "pin",
+#         "phone",
+#         "email",
+#     ]
+
+#     # ✅ Fields allowed for ordering
+#     ordering_fields = [
+#         "name",
+#         "created_at",
+#         "updated_at",
+#         "city",
+#         "pin",
+#     ]
+
+#     # ✅ Default ordering
+#     ordering = ["-created_at"]
+
+
+# class WarehouseCreateView(generics.CreateAPIView):
+#     queryset=Warehouse.objects.all()
+#     serializer_class=WarehouseCreateSerializer
+#     permission_classes=[IsAdmin]
+
+#     def perform_create(self, serializer):
+#         warehouse=serializer.save()
+#         sync_warehouse_to_delhivery(warehouse,create=True)
+#         return warehouse
+    
+#     def create(self, request, *args, **kwargs):
+#         response = super().create(request, *args, **kwargs)
+#         warehouse = Warehouse.objects.get(id=response.data["id"])
+#         return Response({
+#             "warehouse": WarehouseCreateSerializer(warehouse).data,
+#             "delhivery_sync": warehouse.last_sync_message,
+#             "synced": warehouse.delhivery_synced
+#         })
+    
+# class WarehouseUpdateView(generics.UpdateAPIView):
+#     queryset = Warehouse.objects.all()
+#     serializer_class = WarehouseUpdateSerializer
+#     permission_classes=[IsAdmin]
+
+#     def perform_update(self, serializer):
+#         warehouse = serializer.save()
+#         sync_warehouse_to_delhivery(warehouse, create=False)
+#         return warehouse
+
+#     def update(self, request, *args, **kwargs):
+#         response = super().update(request, *args, **kwargs)
+#         warehouse = self.get_object()
+#         return Response({
+#             "warehouse": WarehouseUpdateSerializer(warehouse).data,
+#             "delhivery_sync": warehouse.last_sync_message,
+#             "synced": warehouse.delhivery_synced
+#         })
+
+# class WarehouseDeactivateView(APIView):
+#     permission_classes = [IsAdmin]
+#     def post(self, request, pk):
+#         warehouse = Warehouse.objects.get(pk=pk)
+#         warehouse.is_active = False
+#         warehouse.save(update_fields=['is_active'])
+
+#         sync_warehouse_to_delhivery(warehouse, create=False)
+
+#         return Response({
+#             "message": "Warehouse deactivated",
+#             "synced": warehouse.delhivery_synced,
+#             "delhivery_sync": warehouse.last_sync_message
+#         })

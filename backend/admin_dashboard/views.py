@@ -28,7 +28,7 @@ from django.contrib.auth import get_user_model
 from orders.returnReplacementSerializer import ReturnRequestSerializer,ReplacementRequestSerializer
 from rest_framework.filters import OrderingFilter,SearchFilter
 from django.utils.dateparse import parse_date
-from orders.models import Order,ReturnRequest,ReplacementRequest
+from orders.models import Order,ReturnRequest,ReplacementRequest,OrderStatus,OrderItemStatus
 from .helpers import str_to_bool
 from .pagination import FlexiblePageSizePagination
 from .models import AdminLog
@@ -842,184 +842,163 @@ class DelhiveryWebhookAPIView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
 
+    # ------------------------------------------------------------------
+    # OFFICIAL DELHIVERY → INTERNAL STATUS MAPPING
+    # ------------------------------------------------------------------
+    STATUS_MAP = {
+        # ---------------- FORWARD ----------------
+        ("UD", "manifested"): OrderStatus.PROCESSING,
+        ("UD", "not picked"): OrderStatus.PROCESSING,
+        ("UD", "in transit"): OrderStatus.IN_TRANSIT,
+        ("UD", "pending"): OrderStatus.IN_TRANSIT,
+        ("UD", "dispatched"): OrderStatus.OUT_FOR_DELIVERY,
+        ("DL", "delivered"): OrderStatus.DELIVERED,
+        ("UD", "undelivered"): OrderStatus.UNDELIVERED,
+        ("CN", "cancelled"): OrderStatus.CANCELLED,
+
+        # ---------------- RETURN / RTO ----------------
+        ("RT", "in transit"): OrderStatus.RETURN_INITIATED,
+        ("RT", "pending"): OrderStatus.RETURN_INITIATED,
+        ("RT", "dispatched"): OrderStatus.RETURN_INITIATED,
+        ("DL", "rto"): OrderStatus.DELIVERED_TO_WAREHOUSE,
+    }
+
+    # ------------------------------------------------------------------
+
     def post(self, request):
         try:
             data = request.data
-            logger.info(f"📦 Delhivery Webhook Received: {data}")
+            logger.info("📦 Delhivery Webhook Received: %s", data)
 
-            # ✅ Parse shipments safely
-            shipments = []
-            if "Shipments" in data and data["Shipments"]:
-                shipments = data["Shipments"]
-            elif "Shipment" in data and data["Shipment"]:
-                shipments = [data["Shipment"]]
-            else:
-                shipments = [data] if "AWB" in data else []
-
+            shipments = self._extract_shipments(data)
             if not shipments:
                 return Response({"error": "No shipment data found"}, status=400)
-
-            # ✅ Unified status mapping (forward + return + reverse pickup)
-            status_map = {
-                # --- Forward shipment ---
-                "manifested": "processing",
-                "not picked": "pending_pickup",
-                "picked up": "picked",
-                "in transit": "in_transit",
-                "pending": "pending_delivery",
-                "dispatched": "out_for_delivery",
-                "out for delivery": "out_for_delivery",
-                "delivered": "delivered",
-                "rto initiated": "return_initiated",
-                "rto delivered": "delivered_to_warehouse",
-                "cancelled": "cancelled",
-                "undelivered": "undelivered",
-
-                # --- Reverse pickup (RVP) ---
-                "open": "return_requested",
-                "scheduled": "return_scheduled",
-                "dispatched (pickup)": "pickup_in_progress",
-                "pickup dispatched": "pickup_in_progress",
-                "in transit (reverse)": "return_in_transit",
-                "pending (reverse)": "return_pending",
-                "dto": "delivered_to_warehouse",
-                "rto": "return_to_origin",
-                "canceled": "cancelled",
-                "closed": "return_closed",
-            }
 
             processed = []
 
             for shipment in shipments:
-                if not shipment:
-                    continue
+                result = self._process_shipment(shipment)
+                if result:
+                    processed.append(result)
 
-                # --- Extract key info ---
-                waybill = shipment.get("AWB") or shipment.get("waybill")
-                status_text = (shipment.get("Status") or "").strip().lower()
-                status_type = (shipment.get("Status Type") or "").strip().upper()
-                updated_at = shipment.get("StatusDateTime") or timezone.now()
-
-                if not waybill or not status_text:
-                    logger.warning(f"⚠️ Missing waybill/status: {shipment}")
-                    continue
-
-                # --- Normalize and map ---
-                normalized = status_text
-                if "pickup" in status_text and status_type in ["PP", "PU"]:
-                    normalized = "pickup dispatched"
-                elif "in transit" in status_text and status_type in ["PU", "RT"]:
-                    normalized = "in transit (reverse)"
-                elif status_type == "DL" and status_text in ["dto", "rto"]:
-                    normalized = status_text
-
-                internal_status = status_map.get(normalized) or status_map.get(status_text)
-                if not internal_status:
-                    logger.warning(f"⚠️ Unknown status '{status_text}' ({status_type}) for {waybill}")
-                    continue
-
-                # ---------------- FORWARD ORDERS ----------------
-                order = Order.objects.filter(waybill=waybill).first()
-                if order:
-                    with transaction.atomic():
-                        previous_status = order.status
-                        if previous_status != internal_status:
-                            order.status = internal_status
-                            if internal_status == "delivered":
-                                order.delivered_at = timezone.now()
-                            order.save(update_fields=["status", "delivered_at"])
-                            logger.info(f"✅ Order {order.order_number}: {previous_status} → {internal_status}")
-
-                        # Notify customer
-                        send_multichannel_notification(
-                            user=order.user,
-                            order=order,
-                            event=f"order_{internal_status}",
-                            message=f"Your order {order.order_number} is now {internal_status.replace('_', ' ')}.",
-                            channels=["email"],
-                            template_name="emails/notification.html",
-                            payload={
-                                "waybill": waybill,
-                                "courier": "Delhivery",
-                                "status_updated_at": str(updated_at),
-                            },
-                        )
-
-                    processed.append({
-                        "type": "order",
-                        "order_number": order.order_number,
-                        "status": internal_status,
-                        "waybill": waybill,
-                    })
-                    continue
-
-                # ---------------- RETURN REQUESTS / RVP ----------------
-                rr = ReturnRequest.objects.filter(waybill=waybill).first()
-                if rr:
-                    with transaction.atomic():
-                        previous_status = rr.status
-                        rr.status = internal_status
-                        update_fields = ["status"]
-
-                        if internal_status == "delivered_to_warehouse":
-                            rr.delivered_back_date = timezone.now()
-                            update_fields.append("delivered_back_date")
-
-                        rr.save(update_fields=update_fields)
-                        logger.info(f"♻️ ReturnRequest #{rr.id}: {previous_status} → {internal_status}")
-
-                    # --- Send notifications ---
-                    if internal_status == "delivered_to_warehouse":
-                        # Customer
-                        send_multichannel_notification(
-                            user=rr.user,
-                            order=rr.order,
-                            event="return_delivered",
-                            message=f"Your returned item for order {rr.order.order_number} has reached our warehouse.",
-                            channels=["email"],
-                            template_name="emails/return_delivered_customer.html",
-                            payload={
-                                "return_id": rr.id,
-                                "waybill": waybill,
-                                "courier": "Delhivery",
-                                "status_updated_at": str(updated_at),
-                            },
-                        )
-                        # Admins
-                        for admin_user in User.objects.filter(role="admin", is_active=True):
-                            send_multichannel_notification(
-                                user=admin_user,
-                                order=rr.order,
-                                event="return_delivered_admin",
-                                message=f"Return request #{rr.id} for order {rr.order.order_number} has been delivered to warehouse.",
-                                channels=["email"],
-                                template_name="emails/return_delivered_warehouse.html",
-                                payload={
-                                    "return_id": rr.id,
-                                    "waybill": waybill,
-                                    "courier": "Delhivery",
-                                    "status_updated_at": str(updated_at),
-                                },
-                            )
-
-                    processed.append({
-                        "type": "return",
-                        "return_id": rr.id,
-                        "status": internal_status,
-                        "waybill": waybill,
-                    })
-                    continue
-
-                # ---------------- UNKNOWN AWB ----------------
-                logger.warning(f"🚫 No order/return found for waybill {waybill}")
-
-            logger.info(f"✅ Webhook processed successfully: {processed}")
+            logger.info("✅ Webhook processed successfully: %s", processed)
             return Response({"success": True, "processed": processed}, status=200)
 
         except Exception as e:
-            logger.exception("❌ Error processing Delhivery webhook")
+            logger.exception("❌ Delhivery webhook error")
             return Response({"error": str(e)}, status=500)
 
+    # ------------------------------------------------------------------
+    # HELPERS
+    # ------------------------------------------------------------------
+
+    def _extract_shipments(self, data):
+        if data.get("Shipments"):
+            return data["Shipments"]
+        if data.get("Shipment"):
+            return [data["Shipment"]]
+        if data.get("AWB"):
+            return [data]
+        return []
+
+    def _process_shipment(self, shipment):
+        waybill = shipment.get("AWB") or shipment.get("waybill")
+        status_text = (shipment.get("Status") or "").strip().lower()
+        status_type = (shipment.get("Status Type") or "").strip().upper()
+        updated_at = shipment.get("StatusDateTime") or timezone.now()
+
+        if not waybill or not status_text or not status_type:
+            logger.warning("⚠️ Invalid shipment payload: %s", shipment)
+            return None
+
+        internal_status = self.STATUS_MAP.get((status_type, status_text))
+        if not internal_status:
+            logger.warning(
+                "⚠️ Ignored unknown Delhivery status: %s | %s | %s",
+                waybill, status_type, status_text
+            )
+            return None
+
+        # ---------------- FORWARD ORDER ----------------
+        order = Order.objects.filter(waybill=waybill).first()
+        if order:
+            return self._update_order(order, internal_status, updated_at)
+
+        # ---------------- RETURN / RVP ----------------
+        return_request = ReturnRequest.objects.filter(waybill=waybill).first()
+        if return_request:
+            return self._update_return(return_request, internal_status, updated_at)
+
+        logger.warning("🚫 No order or return found for AWB: %s", waybill)
+        return None
+
+    # ------------------------------------------------------------------
+
+    def _update_order(self, order, new_status, updated_at):
+        with transaction.atomic():
+            if order.status != new_status:
+                old_status = order.status
+                order.status = new_status
+
+                if new_status == OrderStatus.DELIVERED:
+                    order.delivered_at = timezone.now()
+
+                order.save(update_fields=["status", "delivered_at"])
+
+                # 🔑 Sync order items (except refunded)
+                order.items.exclude(
+                    status=OrderItemStatus.REFUNDED
+                ).update(status=new_status)
+
+                logger.info(
+                    "✅ Order %s: %s → %s",
+                    order.order_number, old_status, new_status
+                )
+
+                send_multichannel_notification(
+                    user=order.user,
+                    order=order,
+                    event=f"order_{new_status}",
+                    message=f"Your order {order.order_number} is now {new_status.replace('_', ' ')}.",
+                    channels=["email"],
+                    template_name="emails/notification.html",
+                    payload={
+                        "waybill": order.waybill,
+                        "courier": "Delhivery",
+                        "status_updated_at": str(updated_at),
+                    },
+                )
+
+        return {
+            "type": "order",
+            "order_number": order.order_number,
+            "status": new_status,
+            "waybill": order.waybill,
+        }
+
+    # ------------------------------------------------------------------
+
+    def _update_return(self, rr, new_status, updated_at):
+        with transaction.atomic():
+            old_status = rr.status
+            rr.status = new_status
+
+            if new_status == OrderStatus.DELIVERED_TO_WAREHOUSE:
+                rr.delivered_back_date = timezone.now()
+
+            rr.save()
+
+            logger.info(
+                "♻️ ReturnRequest %s: %s → %s",
+                rr.id, old_status, new_status
+            )
+
+        return {
+            "type": "return",
+            "return_id": rr.id,
+            "status": new_status,
+            "waybill": rr.waybill,
+        }
 
 # class RazorpayWebhookAPIView(APIView):
 #     authentication_classes = []

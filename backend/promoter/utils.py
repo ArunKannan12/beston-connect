@@ -102,33 +102,35 @@ def apply_promoter_commission(order):
                     )
                     logger.warning(f"[CREATE] Item {item.id}, Level {level_info['level']}: {share}")
 
-                # Update wallet only by difference
-                current_promoter.total_commission_earned += share
-                current_promoter.save(update_fields=["total_commission_earned"])
-                logger.warning(f"[WALLET] Added {share} to promoter {current_promoter.id}")
-
+                # ✅ FIXED: Correct commission earned logic
                 if current_promoter.promoter_type == "paid":
+                    # Wallet + earned handled inside add_commission()
                     diff = share - old_amount
                     if diff != 0:
                         current_promoter.add_commission(diff, credit_wallet=True)
                         logger.warning(f"[WALLET] Credited wallet diff={diff} for promoter {current_promoter.id}")
+                else:
+                    # Free promoter → manually update earned
+                    current_promoter.total_commission_earned += share
+                    current_promoter.save(update_fields=["total_commission_earned"])
+                    logger.warning(f"[WALLET] Added {share} to FREE promoter {current_promoter.id}")
 
                 if level_info['level'] == 1:
                     level1_record = pc
 
                 current_promoter = getattr(current_promoter, 'referred_by', None)
 
-            # Merge leftover into Level 1
+            # ✅ FIXED: Merge leftover into Level 1
             if remaining_commission > 0 and level1_record:
                 old_amount = level1_record.amount
                 level1_record.amount += remaining_commission
                 level1_record.save(update_fields=['amount'])
 
-                promoter.total_commission_earned += remaining_commission
-                promoter.save(update_fields=["total_commission_earned"])
-
                 if promoter.promoter_type == "paid":
                     promoter.add_commission(remaining_commission, credit_wallet=True)
+                else:
+                    promoter.total_commission_earned += remaining_commission
+                    promoter.save(update_fields=["total_commission_earned"])
 
                 logger.warning(
                     f"[MERGE] Item {item.id}: leftover {remaining_commission} merged into Level 1 "
