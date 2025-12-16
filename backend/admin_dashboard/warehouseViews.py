@@ -6,7 +6,6 @@ from django.conf import settings
 from .warehouse import DelhiveryPickupRequest
 from rest_framework.generics import ListAPIView
 logger = logging.getLogger(__name__)
-from orders.utils import create_delhivery_shipment
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -91,7 +90,6 @@ def create_delhivery_pickup_request(
         "data": data,
     }
 
-
 class CreateDelhiveryPickupRequestAPIView(APIView):
     permission_classes = [IsAdmin]
 
@@ -102,67 +100,77 @@ class CreateDelhiveryPickupRequestAPIView(APIView):
         pickup_date = serializer.validated_data["pickup_date"]
         slot = serializer.validated_data["slot"]
         expected_package_count = serializer.validated_data["expected_package_count"]
-        order_numbers = serializer.validated_data.get("order_numbers", [])
+        order_numbers = serializer.validated_data["order_numbers"]
 
-        logger.debug(f"Received pickup request: date={pickup_date}, slot={slot}, packages={expected_package_count}, orders={order_numbers}")
+        logger.debug(
+            f"Pickup request received | date={pickup_date} slot={slot} "
+            f"packages={expected_package_count} orders={order_numbers}"
+        )
 
         if not order_numbers:
-            return Response({"error": "No orders specified for pickup."}, status=400)
+            return Response(
+                {"error": "No orders specified for pickup."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        # 1️⃣ Create pickup request in Delhivery
+        # 1️⃣ Validate eligible orders FIRST
+        eligible_orders = Order.objects.filter(
+            order_number__in=order_numbers,
+            status=OrderStatus.PROCESSING,
+            is_paid=True,
+            pickup_request__isnull=True,
+            waybill__isnull=False
+        )
+
+        if eligible_orders.count() != expected_package_count:
+            return Response(
+                {
+                    "error": (
+                        f"Expected {expected_package_count} packages, "
+                        f"but found {eligible_orders.count()} eligible orders."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 2️⃣ Create pickup in Delhivery
         result = create_delhivery_pickup_request(
             pickup_date=pickup_date,
             slot=slot,
             expected_package_count=expected_package_count
         )
 
-        logger.debug(f"Pickup creation result: {result}")
+        logger.debug(f"Delhivery pickup result: {result}")
 
         if not result.get("success"):
-            logger.error(f"Delhivery pickup creation failed: {result}")
             return Response(result, status=status.HTTP_400_BAD_REQUEST)
 
         pickup_request_id = result["pickup_request_id"]
 
-        # 2️⃣ Link eligible orders
-        eligible_orders = Order.objects.filter(
-            id__in=order_numbers,
-            status=OrderStatus.PROCESSING,
-            is_paid=True,
-            pickup_request__isnull=True
-        )
+        # 3️⃣ Link orders to pickup
         shipment_results = []
-        linked_orders_count = 0
 
         with transaction.atomic():
             for order in eligible_orders:
-                try:
-                    order.pickup_request_id = pickup_request_id
-                    order.save(update_fields=["pickup_request"])
-                    linked_orders_count += 1
-                    shipment_results.append({
-                        "order_number": order.order_number,
-                        "waybill": order.waybill,
-                        "tracking_url": order.tracking_url,
-                        "success": True,
-                    })
-                    logger.debug(f"Order linked to pickup: {order.order_number}")
-                except Exception as e:
-                    logger.exception(f"Failed to link order {order.order_number}")
-                    shipment_results.append({
-                        "order_number": order.order_number,
-                        "success": False,
-                        "error": str(e),
-                    })
+                order.pickup_request_id = pickup_request_id
+                order.save(update_fields=["pickup_request_id"])
+
+                shipment_results.append({
+                    "order_number": order.order_number,
+                    "waybill": order.waybill,
+                    "tracking_url": order.tracking_url,
+                    "success": True,
+                })
+
+                logger.debug(f"Order linked to pickup: {order.order_number}")
 
         return Response(
             {
                 "success": True,
                 "pickup_request_id": pickup_request_id,
-                "linked_orders_count": linked_orders_count,
+                "linked_orders_count": eligible_orders.count(),
                 "delhivery_request_id": result.get("delhivery_request_id"),
                 "status": result.get("status"),
-                "data": result.get("data"),
                 "shipments": shipment_results,
             },
             status=status.HTTP_201_CREATED
@@ -189,17 +197,6 @@ class DelhiveryPickupRequestListAPIView(ListAPIView):
     queryset = DelhiveryPickupRequest.objects.all().order_by("-created_at")
     serializer_class = DelhiveryPickupRequestDetailSerializer
     permission_classes = [IsAdmin]
-
-
-
-
-
-
-
-
-
-
-
 
 
 
