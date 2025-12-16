@@ -7,7 +7,13 @@ from .warehouse import DelhiveryPickupRequest
 from rest_framework.generics import ListAPIView
 logger = logging.getLogger(__name__)
 from orders.utils import create_delhivery_shipment
-
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from .warehouseSerializer import DelhiveryPickupRequestSerializer,DelhiveryPickupRequestDetailSerializer,OrderPickupListSerializer
+from accounts.permissions import IsAdmin
+from orders.models import Order,OrderStatus
+from django.db import transaction
 
 DELHIVERY_PICKUP_URL = "https://track.delhivery.com/fm/request/new/"
 
@@ -163,13 +169,6 @@ class CreateDelhiveryPickupRequestAPIView(APIView):
         )
 
 
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from .warehouseSerializer import DelhiveryPickupRequestSerializer,DelhiveryPickupRequestDetailSerializer,OrderPickupListSerializer
-from accounts.permissions import IsAdmin
-from orders.models import Order,OrderStatus
-from django.db import transaction
 
 class EligibleOrdersForPickupAPIView(ListAPIView):
     permission_classes=[IsAdmin]
