@@ -38,15 +38,13 @@ def create_delhivery_pickup_request(
 
     pickup_time = PICKUP_SLOTS[slot]
 
-    # 2️⃣ Pickup location from settings
-    pickup_location = getattr(settings, "DELHIVERY_PICKUP", None)
-    if not pickup_location or "name" not in pickup_location:
+    # 2️⃣ Pickup location name (ONLY name)
+    location_name = getattr(settings, "DELHIVERY_PICKUP_LOCATION", None)
+    if not location_name:
         return {
             "success": False,
-            "error": "DELHIVERY_PICKUP not configured properly.",
+            "error": "DELHIVERY_PICKUP_LOCATION not configured.",
         }
-
-    location_name = pickup_location["name"]
 
     # 3️⃣ Prevent duplicate OPEN pickup
     if DelhiveryPickupRequest.objects.filter(
@@ -56,7 +54,7 @@ def create_delhivery_pickup_request(
     ).exists():
         return {
             "success": False,
-            "error": "An active pickup already exists for this warehouse and date.",
+            "error": "An active pickup already exists for this pickup location and date.",
         }
 
     payload = {
@@ -69,6 +67,7 @@ def create_delhivery_pickup_request(
     headers = {
         "Authorization": f"Token {settings.DELHIVERY_API_TOKEN}",
         "Accept": "application/json",
+        "Content-Type": "application/json",
     }
 
     logger.debug(f"Delhivery pickup payload: {payload}")
@@ -77,7 +76,7 @@ def create_delhivery_pickup_request(
         response = requests.post(
             DELHIVERY_PICKUP_URL,
             headers=headers,
-            json=payload,   # ✅ correct way
+            json=payload,
             timeout=20,
         )
         response.raise_for_status()
@@ -90,7 +89,7 @@ def create_delhivery_pickup_request(
         return {"success": False, "error": "Invalid JSON response from Delhivery"}
 
     delhivery_status = str(data.get("status", "")).upper()
-    status_value = "OPEN" if delhivery_status in ["OPEN", "SUCCESS"] else "FAILED"
+    status_value = "OPEN" if delhivery_status in ("OPEN", "SUCCESS") else "FAILED"
 
     pickup_request = DelhiveryPickupRequest.objects.create(
         pickup_date=pickup_date,
@@ -109,6 +108,7 @@ def create_delhivery_pickup_request(
         "status": pickup_request.status,
         "data": data,
     }
+
 
 class CreateDelhiveryPickupRequestAPIView(APIView):
     permission_classes = [IsAdmin]

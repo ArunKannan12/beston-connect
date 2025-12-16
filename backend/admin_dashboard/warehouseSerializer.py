@@ -134,7 +134,6 @@ class DelhiveryPickupRequestSerializer(serializers.ModelSerializer):
             "id",
             "pickup_date",
             "slot",
-            "expected_package_count",
             "status",
             "delhivery_request_id",
             "order_numbers",  # new field
