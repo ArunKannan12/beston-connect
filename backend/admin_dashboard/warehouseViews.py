@@ -17,8 +17,8 @@ from django.db import transaction
 DELHIVERY_PICKUP_URL = "https://track.delhivery.com/fm/request/new/"
 
 PICKUP_SLOTS = {
-    "midday": time(10, 0, 0),  # 10:00:00 start
-    "evening": time(14, 0, 0), # 14:00:00 start
+    "midday": time(10, 0, 0),
+    "evening": time(14, 0, 0),
 }
 import logging
 
@@ -27,60 +27,81 @@ logger = logging.getLogger(__name__)
 def create_delhivery_pickup_request(
     pickup_date: date,
     slot: str,
-    expected_package_count: int
+    expected_package_count: int,
 ) -> dict:
+    # 1️⃣ Validate slot
     if slot not in PICKUP_SLOTS:
-        logger.debug(f"Invalid slot received: {slot}")
-        return {"success": False, "error": f"Invalid slot. Choose from {list(PICKUP_SLOTS.keys())}"}
+        return {
+            "success": False,
+            "error": f"Invalid slot. Choose from {list(PICKUP_SLOTS.keys())}",
+        }
 
     pickup_time = PICKUP_SLOTS[slot]
-    pickup_location = getattr(settings, "DELHIVERY_PICKUP", None)
 
-    if not pickup_location:
-        logger.debug("DELHIVERY_PICKUP not configured in settings")
-        return {"success": False, "error": "DELHIVERY_PICKUP not configured in settings."}
+    # 2️⃣ Pickup location from settings
+    pickup_location = getattr(settings, "DELHIVERY_PICKUP", None)
+    if not pickup_location or "name" not in pickup_location:
+        return {
+            "success": False,
+            "error": "DELHIVERY_PICKUP not configured properly.",
+        }
+
+    location_name = pickup_location["name"]
+
+    # 3️⃣ Prevent duplicate OPEN pickup
+    if DelhiveryPickupRequest.objects.filter(
+        pickup_date=pickup_date,
+        pickup_location=location_name,
+        status="OPEN",
+    ).exists():
+        return {
+            "success": False,
+            "error": "An active pickup already exists for this warehouse and date.",
+        }
 
     payload = {
         "pickup_date": pickup_date.strftime("%Y-%m-%d"),
         "pickup_time": pickup_time.strftime("%H:%M:%S"),
-        "pickup_location": pickup_location["name"],
+        "pickup_location": location_name,
         "expected_package_count": expected_package_count,
-        "client_code": getattr(settings, "DELHIVERY_CLIENT_CODE", ""),
+    }
+
+    headers = {
+        "Authorization": f"Token {settings.DELHIVERY_API_TOKEN}",
+        "Accept": "application/json",
     }
 
     logger.debug(f"Delhivery pickup payload: {payload}")
 
-    headers = {
-        "Authorization": f"Token {settings.DELHIVERY_API_TOKEN}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-
     try:
-        response = requests.post(DELHIVERY_PICKUP_URL, headers=headers, data=json.dumps(payload), timeout=20)
-        logger.debug(f"Delhivery response status: {response.status_code}")
-        logger.debug(f"Delhivery response text: {response.text}")
+        response = requests.post(
+            DELHIVERY_PICKUP_URL,
+            headers=headers,
+            json=payload,   # ✅ correct way
+            timeout=20,
+        )
         response.raise_for_status()
         data = response.json()
     except requests.exceptions.RequestException as e:
         logger.exception("Delhivery pickup request failed")
         return {"success": False, "error": str(e)}
     except ValueError:
-        logger.warning(f"Invalid JSON response from Delhivery: {response.text}")
-        return {"success": False, "error": "Invalid JSON response"}
+        logger.error("Invalid JSON response from Delhivery")
+        return {"success": False, "error": "Invalid JSON response from Delhivery"}
 
-    # Save the pickup request in DB
+    delhivery_status = str(data.get("status", "")).upper()
+    status_value = "OPEN" if delhivery_status in ["OPEN", "SUCCESS"] else "FAILED"
+
     pickup_request = DelhiveryPickupRequest.objects.create(
         pickup_date=pickup_date,
         pickup_time=pickup_time,
+        pickup_location=location_name,
         expected_package_count=expected_package_count,
         delhivery_request_id=data.get("request_id"),
-        status="OPEN" if data.get("status") == "OPEN" else "FAILED",
+        status=status_value,
         raw_response=data,
         slot=slot,
     )
-
-    logger.debug(f"Pickup request saved in DB: {pickup_request.id}, status: {pickup_request.status}")
 
     return {
         "success": True,
@@ -99,82 +120,66 @@ class CreateDelhiveryPickupRequestAPIView(APIView):
 
         pickup_date = serializer.validated_data["pickup_date"]
         slot = serializer.validated_data["slot"]
-        expected_package_count = serializer.validated_data["expected_package_count"]
         order_numbers = serializer.validated_data["order_numbers"]
-
-        logger.debug(
-            f"Pickup request received | date={pickup_date} slot={slot} "
-            f"packages={expected_package_count} orders={order_numbers}"
-        )
 
         if not order_numbers:
             return Response(
                 {"error": "No orders specified for pickup."},
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # 1️⃣ Validate eligible orders FIRST
+        # 1️⃣ Fetch eligible orders
         eligible_orders = Order.objects.filter(
             order_number__in=order_numbers,
             status=OrderStatus.PROCESSING,
             is_paid=True,
             pickup_request__isnull=True,
-            waybill__isnull=False
+            waybill__isnull=False,
         )
 
-        if eligible_orders.count() != expected_package_count:
+        if not eligible_orders.exists():
             return Response(
-                {
-                    "error": (
-                        f"Expected {expected_package_count} packages, "
-                        f"but found {eligible_orders.count()} eligible orders."
-                    )
-                },
-                status=status.HTTP_400_BAD_REQUEST
+                {"error": "No eligible orders found for pickup."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # 2️⃣ Create pickup in Delhivery
-        result = create_delhivery_pickup_request(
-            pickup_date=pickup_date,
-            slot=slot,
-            expected_package_count=expected_package_count
-        )
+        expected_package_count = eligible_orders.count()
 
-        logger.debug(f"Delhivery pickup result: {result}")
-
-        if not result.get("success"):
-            return Response(result, status=status.HTTP_400_BAD_REQUEST)
-
-        pickup_request_id = result["pickup_request_id"]
-
-        # 3️⃣ Link orders to pickup
-        shipment_results = []
-
+        # 2️⃣ Create pickup + link orders atomically
         with transaction.atomic():
-            for order in eligible_orders:
-                order.pickup_request_id = pickup_request_id
-                order.save(update_fields=["pickup_request_id"])
+            result = create_delhivery_pickup_request(
+                pickup_date=pickup_date,
+                slot=slot,
+                expected_package_count=expected_package_count,
+            )
 
-                shipment_results.append({
-                    "order_number": order.order_number,
-                    "waybill": order.waybill,
-                    "tracking_url": order.tracking_url,
-                    "success": True,
-                })
+            if not result.get("success"):
+                return Response(result, status=status.HTTP_400_BAD_REQUEST)
 
-                logger.debug(f"Order linked to pickup: {order.order_number}")
+            pickup_request_id = result["pickup_request_id"]
+            eligible_orders.update(pickup_request_id=pickup_request_id)
+
+        shipments = [
+            {
+                "order_number": order.order_number,
+                "waybill": order.waybill,
+                "tracking_url": order.tracking_url,
+            }
+            for order in eligible_orders
+        ]
 
         return Response(
             {
                 "success": True,
                 "pickup_request_id": pickup_request_id,
-                "linked_orders_count": eligible_orders.count(),
+                "linked_orders_count": expected_package_count,
                 "delhivery_request_id": result.get("delhivery_request_id"),
                 "status": result.get("status"),
-                "shipments": shipment_results,
+                "shipments": shipments,
             },
-            status=status.HTTP_201_CREATED
+            status=status.HTTP_201_CREATED,
         )
+
 
 
 
