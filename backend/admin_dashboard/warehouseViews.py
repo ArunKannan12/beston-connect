@@ -23,7 +23,6 @@ PICKUP_SLOTS = {
 import logging
 
 logger = logging.getLogger(__name__)
-
 def create_delhivery_pickup_request(
     pickup_date: date,
     slot: str,
@@ -45,6 +44,8 @@ def create_delhivery_pickup_request(
             "success": False,
             "error": "DELHIVERY_PICKUP_LOCATION not configured.",
         }
+
+    location_name = location_name.strip()  # 🔐 safety
 
     # 3️⃣ Prevent duplicate OPEN pickup
     if DelhiveryPickupRequest.objects.filter(
@@ -70,7 +71,14 @@ def create_delhivery_pickup_request(
         "Content-Type": "application/json",
     }
 
-    logger.debug(f"Delhivery pickup payload: {payload}")
+    # 🔍 DEBUG LOGS (IMPORTANT)
+    logger.debug("Delhivery pickup request initiated")
+    logger.debug("Pickup payload: %s", payload)
+    logger.debug(
+        "Delhivery URL: %s | Pickup location: %s",
+        DELHIVERY_PICKUP_URL,
+        location_name,
+    )
 
     try:
         response = requests.post(
@@ -79,11 +87,25 @@ def create_delhivery_pickup_request(
             json=payload,
             timeout=20,
         )
+
+        # 🔥 RESPONSE DEBUG
+        logger.debug("Delhivery response status: %s", response.status_code)
+        logger.debug("Delhivery response body: %s", response.text)
+
         response.raise_for_status()
         data = response.json()
+
+    except requests.exceptions.HTTPError:
+        logger.error("Delhivery pickup HTTP error")
+        return {
+            "success": False,
+            "error": response.text,  # ← THIS WILL TELL US EXACT ISSUE
+        }
+
     except requests.exceptions.RequestException as e:
         logger.exception("Delhivery pickup request failed")
         return {"success": False, "error": str(e)}
+
     except ValueError:
         logger.error("Invalid JSON response from Delhivery")
         return {"success": False, "error": "Invalid JSON response from Delhivery"}
@@ -108,6 +130,7 @@ def create_delhivery_pickup_request(
         "status": pickup_request.status,
         "data": data,
     }
+
 
 
 class CreateDelhiveryPickupRequestAPIView(APIView):
