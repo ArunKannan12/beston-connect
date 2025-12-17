@@ -612,3 +612,48 @@ class AdminLogSerializer(serializers.ModelSerializer):
     def get_formatted_timestamp(self, obj):
         return obj.timestamp.strftime('%d %b %Y, %I:%M %p')
 
+
+class OrderPackingSerializer(serializers.ModelSerializer):
+    products = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Order
+        fields = [
+            "order_number",
+            "status",
+            "total",
+            "payment_method",
+            "created_at",
+            "is_paid",
+            "paid_at",
+            "products",
+        ]
+
+    def get_products(self, obj):
+        products = []
+
+        for item in obj.items.select_related(
+            "product_variant__product"
+        ).prefetch_related(
+            "product_variant__images"
+        ):
+            variant = item.product_variant
+
+            # ✅ Get first Cloudinary image safely
+            image_url = None
+            first_image = variant.images.first()
+            if first_image:
+                image_url = first_image.image_url
+
+            products.append({
+                "item_id": item.id,                     # 🔥 REQUIRED
+                "product_name": variant.product.name,   # 🔥 clearer
+                "variant": str(variant),
+                "quantity": item.quantity,
+                "image": image_url,
+                "packed_at": item.packed_at,
+                "is_packed": bool(item.packed_at),      # 🔥 frontend friendly
+            })
+
+        return products
+

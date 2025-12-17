@@ -97,6 +97,11 @@ def create_delhivery_pickup_request(
 
     except requests.exceptions.HTTPError:
         logger.error("Delhivery pickup HTTP error")
+        if "wallet balance" in response.text.lower():
+            return {
+                "success": False,
+                "error": "Insufficient Delhivery wallet balance. Please recharge (minimum ₹500 required).",
+            }
         return {
             "success": False,
             "error": response.text,  # ← THIS WILL TELL US EXACT ISSUE

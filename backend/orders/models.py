@@ -114,7 +114,6 @@ class Order(models.Model):
         related_name="orders"
     )
 
-    packed_at = models.DateTimeField(null=True, blank=True)
     # --- Meta ---
     order_number = models.CharField(max_length=20, unique=True, editable=False, null=True, blank=True)
     checkout_session_id=models.CharField(max_length=100,null=True,blank=True,db_index=True,help_text="Unique identifier to link retries or failed payment sessions")
@@ -189,7 +188,7 @@ class OrderItem(models.Model):
     # --- Cancellation & Refunds ---
     cancel_reason = models.TextField(blank=True, null=True)
     refund_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-
+    packed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -13,10 +13,11 @@ from .serializers import (
                         ProductVariantAdminSerializer,
                         CustomerSerializer,
                         AdminOrderSerializer,
-                        AdminLogSerializer
+                        AdminLogSerializer,
+                        OrderPackingSerializer
                         )
 from orders.signals import send_multichannel_notification
-from django.db.models import Q
+from django.db.models import Q,Count,F,Prefetch
 from products.models import Product,ProductVariant
 import json
 from rest_framework.parsers import MultiPartParser,FormParser,JSONParser
@@ -28,7 +29,7 @@ from django.contrib.auth import get_user_model
 from orders.returnReplacementSerializer import ReturnRequestSerializer,ReplacementRequestSerializer
 from rest_framework.filters import OrderingFilter,SearchFilter
 from django.utils.dateparse import parse_date
-from orders.models import Order,ReturnRequest,ReplacementRequest,OrderStatus,OrderItemStatus
+from orders.models import Order,ReturnRequest,ReplacementRequest,OrderStatus,OrderItemStatus,OrderItem
 from .helpers import str_to_bool
 from .pagination import FlexiblePageSizePagination
 from .models import AdminLog
@@ -837,6 +838,115 @@ class BannerUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [IsAdmin]
     parser_classes = (MultiPartParser, FormParser)
 
+
+class MarkPackedBulkAPIView(APIView):
+    permission_classes = [IsAdmin]
+
+    def post(self, request):
+        order_numbers = request.data.get('order_numbers', [])
+        if not order_numbers:
+            return Response(
+                {'success': False, 'error': 'No order numbers provided'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        updated_items = []
+        failed_orders = []
+
+        # Prefetch items and variant images for efficiency
+        orders = Order.objects.prefetch_related(
+            Prefetch('items', queryset=OrderItem.objects.select_related('product_variant__product').prefetch_related('product_variant__images'))
+                    ).filter(
+                order_number__in=order_numbers,
+                is_paid=True,
+                status=OrderStatus.PROCESSING
+            )
+
+
+        # Convert to dict for easy lookup
+        orders_dict = {order.order_number: order for order in orders}
+
+        for number in order_numbers:
+            order = orders_dict.get(number)
+            if not order:
+                failed_orders.append({'order_number': number, 'error': 'Not found'})
+                continue
+
+            items = order.items.all()
+            if not items:
+                failed_orders.append({"order_number": number, "error": "No items in order"})
+                continue
+
+            # Skip orders where all items are already packed
+            if all(item.packed_at for item in items):
+                failed_orders.append({"order_number": number, "error": "All items already packed"})
+                continue
+
+            to_update = []
+            for item in items:
+                if not item.packed_at:
+                    item.packed_at = timezone.now()
+                    item.status = OrderItemStatus.PROCESSING
+                    to_update.append(item)
+
+                    # Add info for frontend
+                    first_image = item.product_variant.images.first()
+                    updated_items.append({
+                        "order_number": order.order_number,
+                        "item_id": item.id,
+                        "product_name": item.product_variant.product.name,
+                        "variant": str(item.product_variant),
+                        "quantity": item.quantity,
+                        "image": first_image.image_url if first_image else None,
+                        "packed_at": item.packed_at
+                    })
+
+            if to_update:
+                OrderItem.objects.bulk_update(to_update, ['packed_at', 'status'])
+
+        return Response({
+            'success': len(updated_items) > 0,
+            'updated_items': updated_items,
+            'failed_orders': failed_orders,
+            'message': (
+                'Some items packed successfully'
+                if updated_items else
+                'No items were packed'
+            )
+        })
+
+
+class OrdersPackingListAPIView(APIView):
+    permission_classes = [IsAdmin]
+
+    def get(self, request):
+        orders = (Order.objects.filter(is_paid=True,status=OrderStatus.PROCESSING)
+            .prefetch_related(
+                Prefetch(
+                    "items",queryset=OrderItem.objects.select_related("product_variant", "product_variant__product"
+                    ) )) )
+
+        pending_orders = []
+        packed_orders = []
+
+        for order in orders:
+            items = order.items.all()
+            if not items:
+                continue  # skip orders with no items
+
+            # Check if all items have packed_at (we can add packed_at to OrderItem if needed)
+            if all(getattr(item, 'packed_at', None) for item in items):
+                packed_orders.append(order)
+            else:
+                pending_orders.append(order)
+
+        return Response({
+            'success': True,
+            'pending_count': len(pending_orders),
+            'packed_count': len(packed_orders),
+            'pending_orders': OrderPackingSerializer(pending_orders, many=True).data,
+            'packed_orders': OrderPackingSerializer(packed_orders, many=True).data,
+        })
 
 class DelhiveryWebhookAPIView(APIView):
     permission_classes = [AllowAny]

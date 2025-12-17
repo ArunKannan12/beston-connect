@@ -234,11 +234,13 @@ class DelhiveryPickupRequestDetailSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
         
+
 class OrderPickupListSerializer(serializers.ModelSerializer):
     user_email = serializers.EmailField(source="user.email", read_only=True)
     customer_name = serializers.SerializerMethodField()
     total_weight_grams = serializers.IntegerField(source="weight_total", read_only=True)
     tracking_url = serializers.CharField(source="delhivery_tracking_url", read_only=True)
+    products = serializers.SerializerMethodField()  # Added products info
 
     class Meta:
         model = Order
@@ -254,10 +256,26 @@ class OrderPickupListSerializer(serializers.ModelSerializer):
             "courier",
             "waybill",
             "tracking_url",
-            "packed_at",
             "created_at",
+            "products",  # Added
         ]
         read_only_fields = fields
 
     def get_customer_name(self, obj):
         return f"{obj.user.first_name} {obj.user.last_name}".strip()
+
+    def get_products(self, obj):
+        # Prefetch items and variant images to reduce queries
+        items = obj.items.select_related('product_variant__product').prefetch_related('product_variant__images')
+        product_list = []
+
+        for item in items:
+            first_image = item.product_variant.images.first()
+            product_list.append({
+                "product_name": item.product_variant.product.name,
+                "variant": str(item.product_variant),
+                "quantity": item.quantity,
+                "image": first_image.image_url if first_image else None,
+                "packed_at": item.packed_at,  # now from OrderItem
+            })
+        return product_list

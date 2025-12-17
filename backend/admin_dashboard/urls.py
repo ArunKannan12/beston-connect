@@ -18,8 +18,9 @@ from .views import (
                     BannerCreateAPIView,
                     BannerUpdateDestroyAPIView,
                     VariantBulkActionAPIView,
-                   
+                    MarkPackedBulkAPIView,
                     DelhiveryWebhookAPIView,
+                    OrdersPackingListAPIView
                     )
 from orders.returnReplacement import ReturnRequestUpdateAPIView,ReplacementRequestUpdateAPIView,ReturnRequestDetailAPIView,ReturnRequestRefundAPIView
 from .warehouseViews import CreateDelhiveryPickupRequestAPIView,DelhiveryPickupRequestListAPIView,EligibleOrdersForPickupAPIView
@@ -51,7 +52,8 @@ urlpatterns = [
     path("admin/banners/<int:pk>/", BannerUpdateDestroyAPIView.as_view(), name="banner-update-destroy"),
    
     path("webhook/delhivery/", DelhiveryWebhookAPIView.as_view(), name="delhivery-webhook"),
-
+    path("admin/mark-packed-bulk/", MarkPackedBulkAPIView.as_view(), name="mark-packed-bulk"),
+    path('admin/packing-list/', OrdersPackingListAPIView.as_view(), name='orders-packing-list'),
     # path("warehouses/list/", WarehouseListView.as_view(), name="warehouse-list"),
     # path("warehouses/", WarehouseCreateView.as_view(), name="warehouse-create"),
 
