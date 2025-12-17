@@ -1,12 +1,14 @@
 import { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { LogOut, Package } from "lucide-react";
 import ProfileEditModal from "./ProfileEditModal";
 import { useAuth } from "../../contexts/authContext";
 import ProfileShimmer from "../../shimmer/ProfileShimmer";
+import axiosInstance from "../../api/axiosinstance";
 
 const Profile = () => {
   const { user, setUser, loading, logout } = useAuth();
+  const navigate = useNavigate();
   const [showModal, setShowModal] = useState(false);
   const [location, setLocation] = useState(null);
   const [loadingLocation, setLoadingLocation] = useState(true);
@@ -46,6 +48,29 @@ const Profile = () => {
       fetchGeoLocation();
     }
   }, [ip]);
+
+  const handleRoleSwitch = async (targetRole, redirectTo) => {
+    try {
+      if (user.active_role !== targetRole) {
+        await axiosInstance.post("auth/switch-role/", {
+          role: targetRole,
+        });
+
+        // Update auth context user safely
+        setUser((prev) => ({
+          ...prev,
+          active_role: targetRole,
+        }));
+      }
+
+      navigate(redirectTo);
+    } catch (error) {
+      console.error("Role switch failed", error);
+      alert("Unable to switch role. Please try again.");
+    }
+  };
+
+const isPromoter = user.roles?.includes("promoter");
 
   return (
     <div className="max-w-4xl mx-auto py-12 px-6 bg-white rounded-xl shadow-lg border border-gray-200">
@@ -129,6 +154,32 @@ const Profile = () => {
           <Package size={24} className="mb-1" />
           <span className="text-xs font-medium text-center">Replacements</span>
         </Link>
+          {/* Become / Switch to Promoter */}
+          {!isPromoter && (
+            <Link
+              to="/become-a-promoter"
+              className="flex flex-col items-center justify-center p-3 bg-indigo-100 rounded-lg shadow hover:bg-indigo-200 transition"
+            >
+              <span className="text-lg">🚀</span>
+              <span className="text-xs font-medium text-center">
+                Become a Promoter
+              </span>
+            </Link>
+          )}
+
+              {isPromoter && user.active_role !== "promoter" && (
+                <button
+                  onClick={() =>
+                    handleRoleSwitch("promoter", "/promoter/dashboard")
+                  }
+                  className="flex flex-col items-center justify-center p-3 bg-green-100 rounded-lg shadow hover:bg-green-200 transition"
+                >
+                  <span className="text-lg">🔄</span>
+                  <span className="text-xs font-medium text-center">
+                    Switch to Promoter
+                  </span>
+                </button>
+              )}
 
         {/* Logout */}
         <button

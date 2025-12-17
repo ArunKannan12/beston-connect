@@ -21,7 +21,7 @@ const AdminCommissionLevel = lazy(()=>import("../components/admin/pages/AdminCom
 const AdminPremiumSettings = lazy(()=>import("../components/admin/pages/AdminPremiumSettings.jsx")) ;
 const PickupRequestPage = lazy(()=>import("../components/admin/pages/PickupRequest.jsx")) ;
 // const AdminWarehouse = lazy(()=>import('../components/admin/pages/AdminWarehouse.jsx'))
-
+const AdminOrdersToPack = lazy(()=>import('../components/admin/pages/AdminOrdersToPack.jsx'))
 const AdminPromoterWithdrwalRequest = lazy(()=>import("../components/admin/pages/AdminPromoterWithdrwalRequest.jsx"));
 const Wallet = lazy(()=>import("../components/promoter/Paid/Wallet.jsx"));
 // 🔄 Lazy-loaded Visitor/Customer components
@@ -157,6 +157,7 @@ export const router = createBrowserRouter([
           {path:"commission-levels",element:withSuspense(<AdminCommissionLevel/>)},
           {path:"withdrawal-requests",element:withSuspense(<AdminPromoterWithdrwalRequest/>)},
           {path:"delhivery-pickup-requests",element:withSuspense(<PickupRequestPage/>)},
+          {path:"orders-to-pack",element:withSuspense(<AdminOrdersToPack/>)},
           // {path:"warehouses",element:withSuspense(<AdminWarehouse/>)},
 
         ],

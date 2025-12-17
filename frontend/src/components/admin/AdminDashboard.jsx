@@ -49,6 +49,7 @@ const adminSections = [
       { name: "All Orders", to: "/admin/orders" },
       { name: "Returns", to: "/admin/returns" },
       {name:"Replacements",to:"/admin/replacements"},
+      {name:"orders to pack",to:"/admin/orders-to-pack"},
       {name: "Delhivery Pickup Requests", to: "/admin/delhivery-pickup-requests"}
 
     ],
