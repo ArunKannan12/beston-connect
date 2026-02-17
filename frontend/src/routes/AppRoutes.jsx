@@ -7,6 +7,7 @@ import { useAuth } from "../contexts/authContext";
 
 
 // 🔄 Lazy-loaded Admin components
+const ContactUs = lazy(() => import("../components/visitor/ContactUs.jsx"));
 const AdminReplacements = lazy(() => import("../components/admin/pages/AdminReplacements.jsx"));
 const AdminReturns = lazy(() => import("../components/admin/pages/AdminReturns.jsx"));
 const AdminOrders = lazy(() => import("../components/admin/pages/AdminOrders.jsx"));
@@ -16,14 +17,14 @@ const AdminProducts = lazy(() => import("../components/admin/pages/AdminProducts
 const AdminAllBanner = lazy(() => import('../components/admin/pages/AdminAllBanner.jsx'));
 const AdminDashboard = lazy(() => import("../components/admin/AdminDashboard"));
 const AdminDashboardHome = lazy(() => import('../components/admin/pages/AdminDashboardHome.jsx'));
-const AdminPromoters =lazy(()=>import("../components/admin/pages/AdminPromoters.jsx")) ;
-const AdminCommissionLevel = lazy(()=>import("../components/admin/pages/AdminCommissionLevel.jsx")) ;
-const AdminPremiumSettings = lazy(()=>import("../components/admin/pages/AdminPremiumSettings.jsx")) ;
-const PickupRequestPage = lazy(()=>import("../components/admin/pages/PickupRequest.jsx")) ;
+const AdminPromoters = lazy(() => import("../components/admin/pages/AdminPromoters.jsx"));
+const AdminCommissionLevel = lazy(() => import("../components/admin/pages/AdminCommissionLevel.jsx"));
+const AdminPremiumSettings = lazy(() => import("../components/admin/pages/AdminPremiumSettings.jsx"));
+const PickupRequestPage = lazy(() => import("../components/admin/pages/PickupRequest.jsx"));
 // const AdminWarehouse = lazy(()=>import('../components/admin/pages/AdminWarehouse.jsx'))
-const AdminOrdersToPack = lazy(()=>import('../components/admin/pages/AdminOrdersToPack.jsx'))
-const AdminPromoterWithdrwalRequest = lazy(()=>import("../components/admin/pages/AdminPromoterWithdrwalRequest.jsx"));
-const Wallet = lazy(()=>import("../components/promoter/Paid/Wallet.jsx"));
+const AdminOrdersToPack = lazy(() => import('../components/admin/pages/AdminOrdersToPack.jsx'))
+const AdminPromoterWithdrwalRequest = lazy(() => import("../components/admin/pages/AdminPromoterWithdrwalRequest.jsx"));
+const Wallet = lazy(() => import("../components/promoter/Paid/Wallet.jsx"));
 // 🔄 Lazy-loaded Visitor/Customer components
 const VisitorHomePage = lazy(() => import("../components/visitor/VisitorHomePage"));
 const Home = lazy(() => import("../components/visitor/Home"));
@@ -47,18 +48,18 @@ const ActivateAccount = lazy(() => import("../components/visitor/ActivateAccount
 const VerifyEmail = lazy(() => import("../components/visitor/VerifyEmail"));
 const FacebookAuth = lazy(() => import("../components/visitor/FacebookAuth"));
 const GoogleAuth = lazy(() => import("../components/visitor/GoogleAuth"));
-const PromoterPage = lazy(()=>import("../components/visitor/PromoterPage.jsx"));
-const Withdrawals = lazy(()=>import("../components/promoter/Paid/Withdrawals.jsx"));
+const PromoterPage = lazy(() => import("../components/visitor/PromoterPage.jsx"));
+const Withdrawals = lazy(() => import("../components/promoter/Paid/Withdrawals.jsx"));
+const AdminContactMessages = lazy(() => import('../components/admin/pages/AdminContactMessages.jsx'))
+const SubscriptionManager = lazy(() => import('../components/promoter/Paid/SubscriptionManager.jsx'));
+const PromoterDashboardWrapper = lazy(() => import("../components/promoter/PromoterDashboardWrapper.jsx"));
+const PaidDashboard = lazy(() => import('../components/promoter/Paid/PaidDashboard.jsx'))
+const UnpaidDashboard = lazy(() => import('../components/promoter/Unpaid/UnpaidDashboard.jsx'))
+const AddPromotedProdcts = lazy(() => import("../components/promoter/AddPromotedProdcts.jsx"));
 
-
-const PromoterDashboardWrapper = lazy(()=>import("../components/promoter/PromoterDashboardWrapper.jsx")) ;
-const PaidDashboard = lazy(()=>import('../components/promoter/Paid/PaidDashboard.jsx'))
-const UnpaidDashboard = lazy(()=>import('../components/promoter/Unpaid/UnpaidDashboard.jsx'))
-const AddPromotedProdcts = lazy(()=>import("../components/promoter/AddPromotedProdcts.jsx"));
-
-const PromoterNavbar = lazy(()=>import("../components/promoter/PromoterNavbar.jsx")) ;
-const PremiumPage = lazy(()=>import('../components/promoter/Unpaid/PremiumPage.jsx')) 
-const PromoterProfile = lazy(()=>import("../components/promoter/PromoterProfile.jsx")) ;
+const PromoterNavbar = lazy(() => import("../components/promoter/PromoterNavbar.jsx"));
+const PremiumPage = lazy(() => import('../components/promoter/Unpaid/PremiumPage.jsx'))
+const PromoterProfile = lazy(() => import("../components/promoter/PromoterProfile.jsx"));
 
 // 🌀 Suspense wrapper
 const withSuspense = (Component) => (
@@ -71,17 +72,17 @@ const RedirectHome = () => {
 
 
   if (isAdmin()) {
-    
+
     return <Navigate to="/admin" replace />;
   }
 
   if (isPromoter()) {
-    
+
     return <Navigate to='/promoter/dashboard' replace />;
   }
 
   if (user?.active_role === 'customer') {
-  
+
     return <VisitorHomePage />;
   }
 
@@ -111,7 +112,7 @@ export const router = createBrowserRouter([
       { path: "auth/google", element: withSuspense(<GoogleAuth />) },
     ],
   },
-  
+
   // Customer routes
   {
     element: <ProtectedRoutes allowedRoles={["customer"]} />,
@@ -123,13 +124,15 @@ export const router = createBrowserRouter([
           { path: "/change-password", element: withSuspense(<ChangePassword />) },
           { path: "/checkout", element: withSuspense(<Checkout />) },
           { path: "/orders/", element: withSuspense(<OrderList />) },
-          { path: "/orders/:order_number", element: withSuspense(<OrderDetail />) },
+          { path: "/order-details/:order_number", element: withSuspense(<OrderDetail />) },
           { path: "/returns", element: withSuspense(<ReturnList />) },
-          { path: "replacements", element: withSuspense(<ReplacementList />) },
+          { path: "/replacements", element: withSuspense(<ReplacementList />) },
           { path: "/returns/create/:orderNumber", element: withSuspense(<ReturnRequest />) },
           { path: "/returns/:returnId", element: withSuspense(<ReturnRequest />) },
           { path: "/replacements/create/:orderNumber", element: withSuspense(<ReplacementRequest />) },
-          {path:"become-a-promoter",element:withSuspense(<PromoterPage/>)}
+          { path: "/replacements/:pk", element: withSuspense(<ReplacementRequest />) },
+          { path: "become-a-promoter", element: withSuspense(<PromoterPage />) },
+          { path: "contact-us", element: withSuspense(<ContactUs />) }
         ],
       },
     ],
@@ -152,12 +155,13 @@ export const router = createBrowserRouter([
           { path: "returns", element: withSuspense(<AdminReturns />) },
           { path: "replacements", element: withSuspense(<AdminReplacements />) },
           { path: "banners", element: withSuspense(<AdminAllBanner />) },
-          {path:"promoters",element:withSuspense(<AdminPromoters/>)},
-          {path:"premium-settings",element:withSuspense(<AdminPremiumSettings/>)},
-          {path:"commission-levels",element:withSuspense(<AdminCommissionLevel/>)},
-          {path:"withdrawal-requests",element:withSuspense(<AdminPromoterWithdrwalRequest/>)},
-          {path:"delhivery-pickup-requests",element:withSuspense(<PickupRequestPage/>)},
-          {path:"orders-to-pack",element:withSuspense(<AdminOrdersToPack/>)},
+          { path: "promoters", element: withSuspense(<AdminPromoters />) },
+          { path: "premium-settings", element: withSuspense(<AdminPremiumSettings />) },
+          { path: "commission-levels", element: withSuspense(<AdminCommissionLevel />) },
+          { path: "withdrawal-requests", element: withSuspense(<AdminPromoterWithdrwalRequest />) },
+          { path: "delhivery-pickup-requests", element: withSuspense(<PickupRequestPage />) },
+          { path: "orders-to-pack", element: withSuspense(<AdminOrdersToPack />) },
+          { path: "contact-messages", element: withSuspense(<AdminContactMessages />) },
           // {path:"warehouses",element:withSuspense(<AdminWarehouse/>)},
 
         ],
@@ -167,28 +171,30 @@ export const router = createBrowserRouter([
     ],
   },
   {
-  element: <ProtectedRoutes allowedRoles={["promoter"]} />,
-  children: [
-    {
-      path: "/promoter",
-      element:withSuspense (<PromoterNavbar />), // this allows nested children to render
-      children: [
-        {path:'dashboard',element:withSuspense(<PromoterDashboardWrapper/>)},
-        { path:'dashboard/paid', element:withSuspense(<PaidDashboard/>)},
-        { path:'dashboard/unpaid', element:withSuspense(<UnpaidDashboard/>)},
-        {path:'become-premium-promoter',element:withSuspense(<PremiumPage/>)},
-        {path:'become-premium-promoter',element:withSuspense(<PremiumPage/>)},
-        { path: "withdrawals", element: withSuspense(<Withdrawals />) },
-        { path: "wallet", element: withSuspense(<Wallet />) },
-        {path:'add-promoted-products',element:withSuspense(<AddPromotedProdcts/>)},
-        { path: "profile", element: withSuspense(<PromoterProfile/>) },
-      ],
-    },
-  ],
-},
+    element: <ProtectedRoutes allowedRoles={["promoter"]} />,
+    children: [
+      {
+        path: "/promoter",
+        element: withSuspense(<PromoterNavbar />), // this allows nested children to render
+        children: [
+          { path: 'dashboard', element: withSuspense(<PromoterDashboardWrapper />) },
+          { path: 'dashboard/paid', element: withSuspense(<PaidDashboard />) },
+          { path: 'dashboard/unpaid', element: withSuspense(<UnpaidDashboard />) },
+          { path: 'become-premium-promoter', element: withSuspense(<PremiumPage />) },
+          { path: 'become-premium-promoter', element: withSuspense(<PremiumPage />) },
+          { path: "withdrawals", element: withSuspense(<Withdrawals />) },
+          { path: "wallet", element: withSuspense(<Wallet />) },
+          { path: 'add-promoted-products', element: withSuspense(<AddPromotedProdcts />) },
+          { path: "profile", element: withSuspense(<PromoterProfile />) },
+          { path: 'subscription-manager', element: withSuspense(<SubscriptionManager />) },
+          { path: "contact-us", element: withSuspense(<ContactUs />) }
+        ],
+      },
+    ],
+  },
 
 
-  
+
   // Fallback
   { path: "*", element: withSuspense(<VisitorHomePage />) },
 ]);

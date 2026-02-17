@@ -38,7 +38,7 @@ export const useRazorpayCheckout = () => {
               razorpay_signature: response.razorpay_signature
             });
             toast.success("Payment successful");
-            navigate(`/orders/${orderId}/`);
+            navigate(`/order-details/${orderId}/`);
           } catch (err) {
             toast.error("Payment verification failed");
           }

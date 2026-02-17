@@ -1,385 +1,426 @@
-import React, { useEffect, useState } from "react";
-import axiosInstance from "../../api/axiosinstance.jsx";
-import {useLocation, useNavigate} from 'react-router-dom'
-import { useAuth } from "../../contexts/authContext.jsx";
+import { useEffect, useState } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
+import axiosInstance from "../../api/axiosinstance";
+import { useAuth } from "../../contexts/authContext";
 import { toast } from "react-toastify";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  UserPlus,
+  Crown,
+  Zap,
+  IndianRupee,
+  Loader2,
+  CheckCircle2,
+  Star,
+  ShieldCheck,
+  TrendingUp,
+} from "lucide-react";
 
 const BecomePromoterPage = () => {
-  const [selectedPlan, setSelectedPlan] = useState("");
-  const [showForm, setShowForm] = useState(false); // show form on click
-  const [formData, setFormData] = useState({
-    bank_account_number: "",
-    ifsc_code: "",
-    bank_name: "",
-    account_holder_name: "",
-  });
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState({ type: "", text: "" });
-  const [settings, setSettings] = useState(null);
-  const [timeLeft, setTimeLeft] = useState("");
+  const { user, fetchProfile } = useAuth();
   const navigate = useNavigate();
-  const { user, fetchProfile} = useAuth();
+  const location = useLocation();
+
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [processingPayment, setProcessingPayment] = useState(false);
+
+  const [tier, setTier] = useState("paid"); // Default to paid for conversion emphasis
+  const [plan, setPlan] = useState("annual"); // Default to annual
+  const [pricing, setPricing] = useState(null);
+  const [timeLeft, setTimeLeft] = useState(null);
 
   const isBlocked =
     user?.role === "admin" || user?.roles?.includes("promoter");
 
-  // ❗ Show message if user is already a promoter or admin
+  /* ---------------- Referral ---------------- */
   useEffect(() => {
-    if (!user) return;
+    const ref = new URLSearchParams(location.search).get("ref");
+    if (ref) localStorage.setItem("referral_code", ref);
+  }, [location]);
 
-    if (user.roles?.includes("promoter")) {
-      toast.info("You are already a promoter.");
-    }
-
-    if (user.role === "admin") {
-      toast.info("Admin accounts cannot become promoters.");
-    }
-  }, [user]);
-
-
-  const location=useLocation();
-
-
-  useEffect(()=>{
-    const params = new URLSearchParams(location.search)
-    const ref = params.get('ref')
-    if (ref){
-      localStorage.setItem('referral_code',ref)
-    }
-  },[location])
-
-  const handleChange = (e) => {
-    const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
-  };
-
+  /* ---------------- Pricing ---------------- */
   useEffect(() => {
-    const fetchPremiumSettings = async () => {
+    const loadPricing = async () => {
       try {
-        const res = await axiosInstance.get("promoter/premium-amount/");
-        setSettings(res.data);
-      } catch (error) {
-        console.error("Error fetching premium settings:", error);
+        const res = await axiosInstance.get("/promoter/premium-amount/");
+        setPricing(res.data);
+      } catch {
+        toast.error("Failed to load pricing");
+      } finally {
+        setLoading(false);
       }
     };
-    fetchPremiumSettings();
+    loadPricing();
   }, []);
 
-  // Countdown timer
+  /* ---------------- Offer countdown ---------------- */
   useEffect(() => {
-    if (!settings?.offer_end) return;
-
-    const interval = setInterval(() => {
-      const end = new Date(settings.offer_end);
-      const now = new Date();
-      const diff = end - now;
-
-      if (diff <= 0) {
-        setTimeLeft("Offer expired");
-        clearInterval(interval);
-      } else {
-        const hours = Math.floor(diff / (1000 * 60 * 60));
-        const minutes = Math.floor((diff / (1000 * 60)) % 60);
-        const seconds = Math.floor((diff / 1000) % 60);
-        setTimeLeft(`${hours}h ${minutes}m ${seconds}s`);
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [settings]);
-
-  const handlePlanClick = (plan) => {
-    setSelectedPlan(plan);
-    setShowForm(true);
-
-    setTimeout(() => {
-      const formSelection = document.getElementById('promoter-form-section');
-      if (formSelection) {
-        formSelection.scrollIntoView({behavior:'smooth',block:'start'})
-      }
-    }, 100);
-  };
-
-  const handleSubmit = async () => {
-    if (!selectedPlan) {
-      setMessage({ type: "error", text: "Please select a plan first!" });
+    if (!pricing?.offer_valid_now || !pricing?.offer_end) {
+      setTimeLeft(null);
       return;
     }
 
-    setLoading(true);
-    setMessage({ type: "", text: "" });
+    const end = new Date(pricing.offer_end).getTime();
+    const updateTime = () => {
+      const diff = end - Date.now();
+      if (diff <= 0) {
+        setTimeLeft("Expired");
+        return;
+      }
+      const h = Math.floor(diff / (1000 * 60 * 60));
+      const m = Math.floor((diff / (1000 * 60)) % 60);
+      const s = Math.floor((diff / 1000) % 60);
+      setTimeLeft(`${h}h ${m}m ${s}s`);
+    };
 
-    const referral_code =localStorage.getItem('referral_code')
-    const payload = {...formData}
-    if (referral_code) payload.referral_code = referral_code
+    const i = setInterval(updateTime, 1000);
+    updateTime();
 
+    return () => clearInterval(i);
+  }, [pricing]);
+
+  /* ---------------- Actions ---------------- */
+  const joinFree = async () => {
     try {
-      if (selectedPlan === "unpaid") {
-        const res = await axiosInstance.post("/promoters/", payload);
-       
-        setMessage({
-          type: "success",
-          text: "You are now registered as a Free Promoter!",
-        });
-        localStorage.removeItem('referral_code')
-        await fetchProfile()
-        navigate("/promoter/dashboard", { state: { promoterType: "unpaid" } });
-      } else {
-         const referral_code = localStorage.getItem("referral_code");
-         const paidPayload = { ...formData };
-
-         if (referral_code) paidPayload.referral_code = referral_code;
-
-         const { data } = await axiosInstance.post("/promoter/become-premium/", paidPayload);
-
-        const options = {
-          key: import.meta.env.VITE_RAZORPAY_KEY_ID,
-          amount: data.amount * 100,
-          currency: data.currency,
-          order_id: data.razorpay_order_id,
-          name: user ? `${user.first_name} ${user.last_name}` : formData.account_holder_name,
-          description: "Premium Promoter Registration",
-
-          handler: async (paymentResult) => {
-            try {
-              const referral_code = localStorage.getItem("referral_code");
-
-              const verifyRes = await axiosInstance.post("/promoter/verify-premium-payment/", {
-                razorpay_payment_id: paymentResult.razorpay_payment_id,
-                razorpay_order_id: paymentResult.razorpay_order_id,
-                razorpay_signature: paymentResult.razorpay_signature,
-                referral_code: referral_code || null,
-                ...formData,
-              });
-
-              toast.success("Premium Promoter registration successful!");
-              localStorage.removeItem("referral_code");
-              await fetchProfile();
-              navigate("/promoter/dashboard", { state: { promoterType: "paid" } });
-
-            } catch (err) {
-              console.log(err);
-              toast.error("Payment verification failed. Please contact support.");
-            }
-          },
-
-          prefill: {
-            name: formData.account_holder_name || `${user.first_name} ${user.last_name}`,
-            contact: user?.phone_number || "",
-          },
-
-          theme: { color: "#2563eb" },
-        };
-
-
-         const rzp = new window.Razorpay(options);
-        rzp.open();
-      }
-    } catch (err) {
-      console.log(err);
-      let errorMessage = "Something went wrong.";
-      if (err.response?.data) {
-        const data = err.response.data;
-         if (data.detail) {
-          errorMessage = data.detail;
-        } else if (typeof data === "object") {
-          const firstError = Object.values(data)[0];
-          if (Array.isArray(firstError)) {
-            errorMessage = firstError[0];
-          } else if (typeof firstError === "string") {
-            errorMessage = firstError;
-          }
-        }
-      }
-
-      setMessage({
-        type: "error",
-        text: errorMessage,
-      });
+      setSubmitting(true);
+      const referral_code = localStorage.getItem("referral_code");
+      await axiosInstance.post("/promoters/", referral_code ? { referral_code } : {});
+      toast.success("Welcome aboard! Registered as Free Promoter");
+      localStorage.removeItem("referral_code");
+      await fetchProfile();
+      navigate("/promoter/dashboard");
+    } catch {
+      toast.error("Failed to join. Please try again.");
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
-  if (isBlocked) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center">
-        <h2 className="text-3xl font-bold text-gray-800">Access Restricted</h2>
-        <p className="mt-3 text-gray-600">
-          {user.role === "admin"
-            ? "Admins cannot become promoters."
-            : "You are already a promoter."}
-        </p>
-      </div>
-    );
-  }
+  const joinPremium = async () => {
+    try {
+      setProcessingPayment(true);
+      const referral_code = localStorage.getItem("referral_code");
 
+      const { data } = await axiosInstance.post("/promoter/become-premium/", {
+        plan_type: plan,
+        referral_code,
+      });
 
+      const options = {
+        key: import.meta.env.VITE_RAZORPAY_KEY_ID,
+        amount: Number(data.amount) * 100,
+        currency: "INR",
+        order_id: data.razorpay_order_id,
+        name: "BestOn",
+        description: `Premium Promoter Membership (${plan === 'monthly' ? 'Monthly' : 'Annual'})`,
+        image: "/logo.png", // Ensure you have a logo path if available
+        handler: async (res) => {
+          try {
+            await axiosInstance.post("/promoter/verify-premium-payment/", {
+              razorpay_payment_id: res.razorpay_payment_id,
+              razorpay_order_id: res.razorpay_order_id,
+              razorpay_signature: res.razorpay_signature,
+              plan_type: plan,
+              referral_code,
+              amount: data.amount,
+            });
+
+            toast.success("🎉 Payment Successful! Welcome to Premium.");
+            localStorage.removeItem("referral_code");
+            await fetchProfile();
+            navigate("/promoter/dashboard");
+          } catch (err) {
+            console.error(err);
+            toast.error("Verification failed. Contact support if amount deducted.");
+          }
+        },
+        prefill: {
+          name: `${user.first_name} ${user.last_name}`,
+          email: user.email,
+          contact: user.phone_number
+        },
+        theme: { color: "#7c3aed" },
+      };
+
+      const razorpay = new window.Razorpay(options);
+      razorpay.open();
+      razorpay.on('payment.failed', function (response) {
+        toast.error(response.error.description || "Payment cancelled");
+      });
+
+    } catch (err) {
+      console.error(err);
+      toast.error("Could not initiate payment.");
+    } finally {
+      setProcessingPayment(false);
+    }
+  };
+
+  if (loading || isBlocked) return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <Loader2 className="h-10 w-10 text-purple-600 animate-spin" />
+    </div>
+  );
 
   return (
-    <section className="bg-white">
-      <div className="py-8 px-4 mx-auto max-w-screen-xl lg:py-16 lg:px-6">
-        {/* Header */}
-        <div className="mx-auto max-w-screen-md text-center mb-8 lg:mb-12">
-          <h2 className="mb-4 text-4xl tracking-tight font-extrabold text-gray-900">
-            Become a Promoter
-          </h2>
-          <p className="mb-5 font-light text-gray-500 sm:text-xl">
-            Join our promoter program and earn commissions by promoting our products. Choose the plan that fits your needs.
+    <div className="min-h-screen bg-slate-50 relative overflow-hidden font-sans text-slate-800">
+      {/* Background Decor */}
+      <div className="absolute top-0 left-0 w-full h-96 bg-gradient-to-br from-indigo-600 via-purple-600 to-indigo-800 skew-y-[-3deg] transform origin-top-left translate-y-[-50px] z-0" />
+      <div className="absolute top-0 right-0 w-96 h-96 bg-purple-500 rounded-full blur-3xl opacity-20 -translate-y-1/2 translate-x-1/2" />
+
+      <div className="relative z-10 max-w-6xl mx-auto px-4 py-20">
+
+        {/* Header Section */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="text-center mb-16 text-white"
+        >
+          <div className="inline-flex items-center justify-center p-2 px-4 rounded-full bg-white/10 backdrop-blur-md border border-white/20 mb-6 text-sm font-medium tracking-wide">
+            <Star className="w-4 h-4 text-yellow-300 mr-2 fill-yellow-300" />
+            Join the Elite Promoter Network
+          </div>
+          <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight mb-6 leading-tight">
+            Turn Your Influence <br className="hidden md:block" />
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-yellow-200 to-amber-400">
+              Into Real Earnings
+            </span>
+          </h1>
+          <p className="text-lg md:text-xl text-indigo-100 max-w-2xl mx-auto leading-relaxed">
+            Promote world-class products and earn unmatched commissions.
+            Choose the plan that fits your ambition.
           </p>
-        </div>
+        </motion.div>
 
-        {/* Promoter Options */}
-        <div className="grid gap-6 md:grid-cols-2">
-          {/* Free Promoter */}
-          <div className="flex flex-col p-8 mx-auto w-full max-w-md min-h-[550px] text-center text-gray-900 bg-white rounded-xl shadow-lg border-t-4 border-green-500 transform transition duration-300 hover:scale-105 hover:shadow-2xl">
-              <h3 className="mb-4 text-4xl font-semibold">Free Promoter</h3>
-              <p className="font-light text-gray-500 sm:text-lg">
-                Start promoting without any cost. Great for beginners.
+        {/* Pricing Cards Container */}
+        <div className="grid md:grid-cols-2 gap-8 md:gap-12 max-w-5xl mx-auto">
+
+          {/* FREE TIER CARD */}
+          <motion.div
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: 0.1 }}
+            onClick={() => setTier("unpaid")}
+            className={`group relative rounded-3xl p-8 cursor-pointer transition-all duration-300 border-2 bg-white shadow-xl
+              ${tier === "unpaid"
+                ? "border-slate-300 ring-4 ring-slate-200 scale-100 md:scale-[0.98] lg:scale-100 z-10"
+                : "border-transparent opacity-80 hover:opacity-100 hover:scale-[1.01]"}
+            `}
+          >
+            <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-slate-100 border border-slate-200 text-slate-500 font-bold px-4 py-1 rounded-full text-xs uppercase tracking-wider shadow-sm">
+              Starter
+            </div>
+
+            <div className="text-center mb-8">
+              <h3 className="text-2xl font-bold text-slate-700">Free Partner</h3>
+              <div className="mt-4 flex items-center justify-center gap-1 text-slate-900">
+                <span className="text-4xl font-bold">₹0</span>
+                <span className="text-slate-400 font-medium">/ lifetime</span>
+              </div>
+              <p className="mt-4 text-sm text-slate-500">
+                Perfect for those just starting out.
               </p>
+            </div>
 
-              <div className="flex justify-center items-baseline my-8">
-                <span className="mr-2 text-5xl font-extrabold">₹0</span>
+            <div className="space-y-4 mb-8">
+              {[
+                "Limited product selection",
+                "Standard commission rates",
+                "Basic analytics dashboard",
+                "Community support"
+              ].map((item, i) => (
+                <div key={i} className="flex items-center text-sm text-slate-600">
+                  <CheckCircle2 className="w-5 h-5 text-indigo-500 mr-3 flex-shrink-0" />
+                  {item}
+                </div>
+              ))}
+            </div>
+
+            <button
+              onClick={(e) => { e.stopPropagation(); setTier("unpaid"); joinFree(); }}
+              disabled={submitting}
+              className={`w-full py-4 rounded-xl font-bold text-lg transition-all
+                  ${tier === "unpaid" ? "bg-slate-900 text-white hover:bg-slate-800 shadow-lg" : "bg-slate-100 text-slate-600"}
+                `}
+            >
+              {submitting ? <Loader2 className="w-6 h-6 animate-spin mx-auto" /> : "Join for Free"}
+            </button>
+          </motion.div>
+
+
+          {/* PREMIUM TIER CARD */}
+          <motion.div
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: 0.2 }}
+            onClick={() => setTier("paid")}
+            className={`group relative rounded-3xl p-1 bg-gradient-to-b from-amber-300 to-purple-600 cursor-pointer shadow-2xl transition-all duration-300
+              ${tier === "paid" ? "scale-105 z-20 ring-4 ring-purple-100" : "scale-100 opacity-90 hover:opacity-100 hover:scale-[1.02]"}
+            `}
+          >
+            {/* Recommended Badge */}
+            <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-gradient-to-r from-amber-500 via-orange-500 to-red-500 text-white font-extrabold px-6 py-1.5 rounded-full text-xs uppercase tracking-wider shadow-lg flex items-center gap-1 z-30">
+              <Crown className="w-3 h-3 fill-white" /> Recommended
+            </div>
+
+            <div className="bg-white rounded-[20px] p-8 h-full relative overflow-hidden">
+              {/* Background glow inside card */}
+              <div className="absolute top-0 right-0 w-64 h-64 bg-amber-100 rounded-full blur-3xl opacity-50 -translate-y-1/2 translate-x-1/2" />
+
+              <div className="text-center relative z-10 mb-6">
+                <h3 className="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-purple-700 to-indigo-600">Premium Pro</h3>
+                <p className="mt-2 text-sm text-indigo-900/60 font-medium">Unlock Unlimited Potential</p>
               </div>
 
-              <ul role="list" className="mb-8 space-y-4 text-left text-gray-700">
-                <li className="flex items-center space-x-2">
-                  <span className="text-green-500">✔</span>
-                  <span>Access to product links</span>
-                </li>
-                <li className="flex items-center space-x-2">
-                  <span className="text-green-500">✔</span>
-                  <span>Earn commission on sales</span>
-                </li>
-                <li className="flex items-center space-x-2">
-                  <span className="text-green-500">✔</span>
-                  <span>Basic support</span>
-                </li>
-              </ul>
-
-              <button
-                onClick={() => handlePlanClick("unpaid")}
-                className="w-full bg-gradient-to-r from-green-400 to-green-600 text-white font-semibold rounded-xl px-6 py-3 text-lg transition-all duration-300 transform hover:scale-105 hover:shadow-lg active:scale-95 focus:outline-none focus:ring-4 focus:ring-green-200"
-              >
-                Join Free
-              </button>
-            </div>
-
-
-          {/* Paid Promoter */}
-          <div className="flex flex-col p-8 mx-auto w-full max-w-md min-h-[550px] text-center text-gray-900 bg-white rounded-xl shadow-lg border-t-4 border-yellow-500 transform transition duration-300 hover:scale-105 hover:shadow-2xl">
-            <h3 className="mb-4 text-4xl font-semibold">Paid Promoter</h3>
-            <p className="font-light text-gray-500 sm:text-lg">
-              Get higher commission rates and exclusive benefits.
-            </p>
-
-            <div className="flex flex-col justify-center items-center my-8 relative">
-              {settings ? (
-                <>
-                  {settings.offer_active && (
-                    <span className="text-gray-500 line-through text-xl mr-2">₹{settings.original_amount}</span>
-                  )}
-                  <span className="text-5xl font-extrabold">₹{settings.amount}</span>
-                  
-                  {settings.offer_active && settings.offer_end && (
-                    <p className="mt-4 inline-block px-5 py-2 rounded-full bg-red-600 text-white font-bold text-lg animate-pulse shadow-lg">
-                      Offer ends in: {timeLeft}
-                    </p>
-                  )}
-                </>
-              ) : (
-                <span className="text-2xl font-semibold">Loading...</span>
+              {/* Pricing Toggle */}
+              {pricing && (
+                <div className="bg-slate-100 p-1 rounded-xl flex mb-8 relative z-10">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setPlan("monthly"); }}
+                    className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${plan === "monthly" ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                  >
+                    Monthly
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setPlan("annual"); }}
+                    className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all flex items-center justify-center gap-2 ${plan === "annual" ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                  >
+                    Annual
+                    <span className="bg-green-100 text-green-700 text-[10px] px-2 py-0.5 rounded-full">Save Big</span>
+                  </button>
+                </div>
               )}
 
+              {/* Dynamic Price Display */}
+              <div className="text-center mb-8 relative z-10">
+                {pricing ? (
+                  <div className="flex flex-col items-center justify-center h-20">
+                    {(() => {
+                      const isAnnual = plan === "annual";
+                      const basePrice = isAnnual ? pricing.annual_amount : pricing.monthly_amount;
+                      const offerPrice = isAnnual ? pricing.offer_annual_amount : pricing.offer_monthly_amount;
+                      const showOffer = pricing.offer_valid_now && offerPrice;
+
+                      return (
+                        <>
+                          <div className="flex items-center gap-2">
+                            <span className="text-5xl font-black text-slate-900 tracking-tight">
+                              ₹
+                              {showOffer ? String(offerPrice).split('.')[0] : String(basePrice).split('.')[0]}
+                            </span>
+                            <span className="text-slate-400 font-medium text-lg mt-4">/{isAnnual ? 'year' : 'mo'}</span>
+                          </div>
+
+                          {showOffer ? (
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="text-slate-400 line-through decoration-red-500 decoration-2 text-sm">₹{basePrice}</span>
+                              <span className="text-red-500 font-bold text-xs bg-red-50 px-2 py-0.5 rounded-full">Save {(100 - (offerPrice / basePrice) * 100).toFixed(0)}%</span>
+                            </div>
+                          ) : (
+                            isAnnual && pricing.main_annual_savings > 0 && (
+                              <span className="text-green-600 font-bold text-sm bg-green-50 px-2 py-0.5 rounded-full mt-1">
+                                Active Annual Savings
+                              </span>
+                            )
+                          )}
+                        </>
+                      )
+                    })()}
+                  </div>
+                ) : (
+                  <div className="h-20 flex items-center justify-center">
+                    <div className="w-32 h-8 bg-slate-200 rounded animate-pulse" />
+                  </div>
+                )}
+              </div>
+
+              {/* Countdown Timer Widget */}
+              <AnimatePresence>
+                {pricing?.offer_valid_now && timeLeft && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="mb-8"
+                  >
+                    <div className="bg-red-50 border border-red-100 rounded-lg p-3 text-center">
+                      <p className="text-red-600 text-xs font-bold uppercase tracking-wide mb-1">Offer Ends In</p>
+                      <p className="text-slate-900 font-mono font-bold text-lg">{timeLeft}</p>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Features List */}
+              <div className="space-y-4 mb-10 relative z-10">
+                {[
+                  "Unlimited Access to All Products",
+                  "Highest Commission Tiers (Up to 15%)",
+                  "Priority 24/7 Support",
+                  "Early Access to New Launches",
+                  "Smart Analytics & Insights"
+                ].map((item, i) => (
+                  <div key={i} className="flex items-start text-sm text-slate-700 font-medium">
+                    <div className="mt-0.5 mr-3 p-0.5 bg-yellow-100 rounded-full">
+                      <CheckCircle2 className="w-4 h-4 text-amber-600" />
+                    </div>
+                    {item}
+                  </div>
+                ))}
+              </div>
+
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={(e) => { e.stopPropagation(); setTier("paid"); joinPremium(); }}
+                disabled={processingPayment}
+                className={`w-full py-4 rounded-xl font-bold text-lg shadow-xl shadow-purple-200 transition-all text-white
+                        bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700
+                    `}
+              >
+                {processingPayment ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <Loader2 className="w-5 h-5 animate-spin" /> Processing...
+                  </span>
+                ) : (
+                  <span className="flex items-center justify-center gap-2">
+                    Get Started Now <TrendingUp className="w-5 h-5" />
+                  </span>
+                )}
+              </motion.button>
             </div>
-
-            <ul role="list" className="mb-8 space-y-4 text-left text-gray-700">
-              <li className="flex items-center space-x-2">
-                <span className="text-green-500">✔</span>
-                <span>Higher commission rates</span>
-              </li>
-              <li className="flex items-center space-x-2">
-                <span className="text-green-500">✔</span>
-                <span>Priority support</span>
-              </li>
-              <li className="flex items-center space-x-2">
-                <span className="text-green-500">✔</span>
-                <span>Access to promotional materials</span>
-              </li>
-            </ul>
-
-            <button
-              onClick={() => handlePlanClick("paid")}
-              className="w-full bg-gradient-to-r from-yellow-400 via-yellow-500 to-yellow-600 text-white font-semibold rounded-xl px-6 py-3 text-lg transition-all duration-300 transform hover:scale-105 hover:shadow-lg active:scale-95 focus:outline-none focus:ring-4 focus:ring-yellow-200"
-            >
-              Join Paid
-            </button>
-          </div>
+          </motion.div>
 
         </div>
 
-        {/* Form Section */}
-        {showForm && (
-          <div id="promoter-form-section" className="mt-10 max-w-md mx-auto bg-white p-8 rounded-2xl shadow-2xl border border-gray-100">
-            <h3 className="mb-6 text-3xl font-extrabold text-center text-gray-900">
-              {selectedPlan === "unpaid" ? "Free Promoter Registration" : "Premium Promoter Registration"}
-            </h3>
-
-            {message.text && (
-              <p className={`mb-6 text-center font-semibold ${
-                message.type === "error" ? "text-red-600" : "text-green-600"
-              }`}>
-                {message.text}
-              </p>
-            )}
-
-            <div className="space-y-5">
-              <input
-                type="text"
-                name="account_holder_name"
-                value={formData.account_holder_name}
-                onChange={handleChange}
-                placeholder="Account Holder Name"
-                className="w-full px-5 py-3 border border-gray-300 rounded-xl shadow-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all"
-              />
-              <input
-                type="text"
-                name="bank_account_number"
-                value={formData.bank_account_number}
-                onChange={handleChange}
-                placeholder="Bank Account Number"
-                className="w-full px-5 py-3 border border-gray-300 rounded-xl shadow-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all"
-              />
-              <input
-                type="text"
-                name="ifsc_code"
-                value={formData.ifsc_code}
-                onChange={handleChange}
-                placeholder="IFSC Code"
-                className="w-full px-5 py-3 border border-gray-300 rounded-xl shadow-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all"
-              />
-              <input
-                type="text"
-                name="bank_name"
-                value={formData.bank_name}
-                onChange={handleChange}
-                placeholder="Bank Name"
-                className="w-full px-5 py-3 border border-gray-300 rounded-xl shadow-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all"
-              />
+        {/* Info Grid Section */}
+        <div className="mt-24 grid md:grid-cols-3 gap-8 text-center max-w-5xl mx-auto">
+          <div className="p-6">
+            <div className="w-14 h-14 bg-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-4 text-indigo-600">
+              <ShieldCheck className="w-8 h-8" />
             </div>
-
-            <button
-              onClick={handleSubmit}
-              className="mt-8 w-full bg-green-600 text-white from-primary-600 to-primary-500 hover:from-primary-700 hover:to-primary-600  font-semibold py-3 rounded-xl shadow-lg transform transition-all duration-300 hover:scale-105 focus:outline-none focus:ring-4 focus:ring-primary-300"
-              disabled={loading}
-            >
-              {loading ? "Processing..." : "Submit"}
-            </button>
+            <h4 className="font-bold text-lg text-slate-800 mb-2">Secure Payments</h4>
+            <p className="text-slate-500 text-sm">Automated monthly payouts directly to your bank account.</p>
           </div>
-        )}
+          <div className="p-6">
+            <div className="w-14 h-14 bg-purple-100 rounded-2xl flex items-center justify-center mx-auto mb-4 text-purple-600">
+              <TrendingUp className="w-8 h-8" />
+            </div>
+            <h4 className="font-bold text-lg text-slate-800 mb-2">Real-Time Tracking</h4>
+            <p className="text-slate-500 text-sm">Monitor clicks, conversions and earnings in real-time.</p>
+          </div>
+          <div className="p-6">
+            <div className="w-14 h-14 bg-amber-100 rounded-2xl flex items-center justify-center mx-auto mb-4 text-amber-600">
+              <Star className="w-8 h-8" />
+            </div>
+            <h4 className="font-bold text-lg text-slate-800 mb-2">Dedicated Support</h4>
+            <p className="text-slate-500 text-sm">Our team is here to help you maximize your success.</p>
+          </div>
+        </div>
 
       </div>
-    </section>
+    </div>
   );
 };
 

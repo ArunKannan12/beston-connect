@@ -13,7 +13,11 @@ const ReturnList = () => {
     try {
       const res = await axiosInstance.get("returns/");
       setReturns(res.data.results);
+      console.log(res.data);
+      
     } catch (error) {
+      console.log(error);
+      
       const errMsg = error.response?.data?.detail || "Failed to load returns";
       toast.error(errMsg);
     } finally {
@@ -26,7 +30,7 @@ const ReturnList = () => {
   }, []);
 
   if (loading)
-    return <ReturnListShimmer/>;
+    return <ReturnListShimmer />;
 
   if (!returns.length)
     return (
@@ -69,15 +73,14 @@ const ReturnList = () => {
 
               <div className="text-sm text-center sm:text-right">
                 <span
-                  className={`inline-block px-3 py-1 rounded-full font-semibold text-white ${
-                    ret.status === "pending"
+                  className={`inline-block px-3 py-1 rounded-full font-semibold text-white ${ret.status === "pending"
                       ? "bg-yellow-500"
                       : ret.status === "approved"
-                      ? "bg-green-600"
-                      : ret.status === "refunded"
-                      ? "bg-blue-600"
-                      : "bg-gray-500"
-                  }`}
+                        ? "bg-green-600"
+                        : ret.status === "refunded"
+                          ? "bg-blue-600"
+                          : "bg-gray-500"
+                    }`}
                 >
                   {ret.status.toUpperCase()}
                 </span>

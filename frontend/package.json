@@ -36,6 +36,7 @@
     "react-slick": "^0.31.0",
     "react-spinners": "^0.17.0",
     "react-toastify": "^11.0.5",
+    "react-tsparticles": "^2.12.2",
     "recharts": "^3.2.1",
     "slick-carousel": "^1.8.1",
     "swiper": "^12.0.2"

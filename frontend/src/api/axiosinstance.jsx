@@ -1,7 +1,8 @@
 import axios from "axios";
 import { getCsrfToken } from "../utils/csrf";
 
-const BASE_URL = "https://beston-connect.onrender.com/api";
+// const BASE_URL = "https://beston-connect.onrender.com/api";
+const BASE_URL = 'http://localhost:8000/api/'
 
 console.log(BASE_URL,'baseurl');
 
@@ -54,7 +55,7 @@ axiosInstance.interceptors.response.use(
       originalRequest._retry = true;
 
       try {
-        await axios.post(`${BASE_URL}/auth/jwt/refresh/`, {}, { withCredentials: true });
+        await axios.post(`${BASE_URL}auth/jwt/refresh/`, {}, { withCredentials: true });
         return axiosInstance(originalRequest);
       } catch (refreshError) {
         console.error("🔒 Token refresh failed:", refreshError);

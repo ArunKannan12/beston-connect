@@ -41,74 +41,67 @@ const CheckoutSummary = ({
   };
 
   return (
-    <div className="mt-8 sm:mt-10">
-      <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6 sm:p-8 transition-all hover:shadow-xl">
-        <h2 className="text-2xl font-semibold text-gray-900 mb-5">
-          Order Summary
-        </h2>
+    <div className="space-y-6 text-white font-sans">
+      <h2 className="text-2xl font-black mb-8 flex items-center gap-3">
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+        </svg>
+        Order Summary
+      </h2>
 
-        <div className="space-y-4">
-          <div className="flex justify-between text-gray-700">
-            <span>Subtotal</span>
-            <span className="font-medium">₹{safeSubtotal.toFixed(2)}</span>
-          </div>
-
-          <div className="flex justify-between text-gray-700">
-            <span>Delivery Charges</span>
-            <span className="font-medium">₹{safeDelivery.toFixed(2)}</span>
-          </div>
-
-          {estimatedDeliveryDays && (
-            <div className="flex justify-between text-gray-700 border-t border-gray-200 pt-4">
-              <span>Estimated Delivery</span>
-              <span className="text-green-600 font-medium">
-                {getEstimatedDateRange(estimatedDeliveryDays)}
-              </span>
-            </div>
-          )}
-
-          <div className="border-t border-gray-300 pt-5 mt-3 flex justify-between text-lg">
-            <span className="font-semibold text-gray-800">Total</span>
-            <span className="font-bold text-gray-900">
-              ₹{safeTotal.toFixed(2)}
-            </span>
-          </div>
+      <div className="space-y-4">
+        <div className="flex justify-between text-gray-400 font-medium tracking-tight">
+          <span>Subtotal</span>
+          <span className="text-white">₹{safeSubtotal.toFixed(2)}</span>
         </div>
 
-        <button
-          onClick={handlePlaceOrder}
-          disabled={isPlacing}
-          className={`mt-6 w-full flex justify-center items-center gap-2 py-3 rounded-lg font-semibold text-white transition ${
-            isPlacing
-              ? "bg-gray-400 cursor-not-allowed"
-              : "bg-blue-600 hover:bg-blue-700 shadow-md hover:shadow-lg"
-          }`}
-        >
-          {isPlacing && (
-            <svg
-              className="animate-spin h-5 w-5 text-white"
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-            >
-              <circle
-                className="opacity-25"
-                cx="12"
-                cy="12"
-                r="10"
-                stroke="currentColor"
-                strokeWidth="4"
-              />
-              <path
-                className="opacity-75"
-                fill="currentColor"
-                d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-              />
-            </svg>
-          )}
-          {isPlacing ? "Placing order..." : "Place Order"}
-        </button>
+        <div className="flex justify-between text-gray-400 font-medium tracking-tight">
+          <span>Delivery Charges</span>
+          <span className="text-emerald-400">
+            {safeDelivery > 0 ? `₹${safeDelivery.toFixed(2)}` : "FREE"}
+          </span>
+        </div>
+
+        {estimatedDeliveryDays && (
+          <div className="pt-4 border-t border-gray-800">
+            <div className="flex justify-between items-center bg-white/5 rounded-2xl p-4 border border-white/10">
+              <div className="text-xs">
+                <p className="text-gray-500 uppercase tracking-widest font-bold mb-1">Estimated Arrival</p>
+                <p className="text-sm font-bold text-white">{getEstimatedDateRange(estimatedDeliveryDays)}</p>
+              </div>
+              <span className="text-2xl">📦</span>
+            </div>
+          </div>
+        )}
+
+        <div className="pt-6 mt-4 border-t border-gray-800 flex justify-between items-end">
+          <div>
+            <span className="text-sm text-gray-500 uppercase tracking-widest font-black">Total to pay</span>
+            <p className="text-4xl font-black text-white leading-none mt-1">₹{safeTotal.toFixed(2)}</p>
+          </div>
+          <p className="text-[10px] text-gray-500 uppercase font-bold text-right tracking-tighter">Incl. all taxes</p>
+        </div>
       </div>
+
+      <button
+        onClick={handlePlaceOrder}
+        disabled={isPlacing}
+        className="w-full mt-8 py-5 bg-white text-gray-900 rounded-3xl font-black text-lg hover:scale-[1.02] active:scale-[0.98] transition shadow-lg flex items-center justify-center gap-3 disabled:opacity-50"
+      >
+        {isPlacing ? (
+          <>
+            <div className="w-5 h-5 border-2 border-gray-900 border-t-transparent rounded-full animate-spin"></div>
+            <span>Processing...</span>
+          </>
+        ) : (
+          <>
+            <span>Place Order Securely</span>
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+            </svg>
+          </>
+        )}
+      </button>
     </div>
   );
 };

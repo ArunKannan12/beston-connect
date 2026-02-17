@@ -105,151 +105,191 @@ const AddressForm = ({ initialData = {}, onSave, onCancel }) => {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form onSubmit={handleSubmit} className="space-y-6 font-sans">
       {/* Global Errors */}
       {errors.non_field_errors && (
-        <div className="text-red-600 text-sm">
+        <div className="bg-red-50 text-red-600 text-xs font-bold p-4 rounded-2xl border border-red-100 animate-shake">
           {errors.non_field_errors.join(", ")}
         </div>
       )}
 
-      {/* Full Name */}
-      <input
-        type="text"
-        name="full_name"
-        value={formData.full_name}
-        onChange={handleChange}
-        placeholder="Full Name"
-        className="w-full border rounded px-3 py-2"
-        required
-      />
+      {/* Main Details */}
+      <div className="space-y-4">
+        <div>
+          <label className="text-[10px] text-gray-400 font-black uppercase tracking-widest ml-4 mb-1 block">Full Name</label>
+          <input
+            type="text"
+            name="full_name"
+            value={formData.full_name}
+            onChange={handleChange}
+            placeholder="John Doe"
+            className="w-full bg-gray-50 border-2 border-gray-100 rounded-[1.5rem] px-6 py-4 focus:bg-white focus:border-blue-600 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none font-bold text-gray-900"
+            required
+          />
+        </div>
 
-      {/* Address */}
-      <textarea
-        name="address"
-        value={formData.address}
-        onChange={handleChange}
-        placeholder="Street Address"
-        className="w-full border rounded px-3 py-2"
-        required
-      />
+        <div>
+          <label className="text-[10px] text-gray-400 font-black uppercase tracking-widest ml-4 mb-1 block">Street Address</label>
+          <textarea
+            name="address"
+            value={formData.address}
+            onChange={handleChange}
+            placeholder="House No, Building, Street, Area"
+            className="w-full bg-gray-50 border-2 border-gray-100 rounded-[1.5rem] px-6 py-4 focus:bg-white focus:border-blue-600 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none font-bold text-gray-900 min-h-[100px]"
+            required
+          />
+        </div>
+      </div>
 
-      {/* Pincode */}
-      <input
-        type="text"
-        name="postal_code"
-        value={formData.postal_code}
-        onChange={handleChange}
-        placeholder="Pincode"
-        className="w-full border rounded px-3 py-2"
-        required
-      />
+      {/* Region Grid 1 */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label className="text-[10px] text-gray-400 font-black uppercase tracking-widest ml-4 mb-1 block">Pincode</label>
+          <div className="relative">
+            <input
+              type="text"
+              name="postal_code"
+              value={formData.postal_code}
+              onChange={handleChange}
+              placeholder="600001"
+              className={`w-full bg-gray-50 border-2 rounded-[1.5rem] px-6 py-4 focus:bg-white transition-all outline-none font-bold text-gray-900 ${formData.serviceable === false ? "border-red-200" : "border-gray-100 focus:border-blue-600 focus:ring-4 focus:ring-blue-500/10"
+                }`}
+              required
+            />
+            {checkingService && (
+              <div className="absolute right-6 top-1/2 -translate-y-1/2">
+                <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+              </div>
+            )}
+          </div>
+        </div>
 
-      {/* Serviceability Info */}
-      {checkingService ? (
-        <p className="text-blue-500 text-sm">Checking delivery availability...</p>
-      ) : formData.serviceable === false ? (
-        <p className="text-red-600 text-sm">
-          ❌ Sorry, we currently do not deliver to this pincode.
-        </p>
-      ) : formData.serviceable === true ? (
-        <p className="text-green-600 text-sm">✅ Delivery available in this area (Prepaid only)</p>
-      ) : null}
+        <div>
+          <label className="text-[10px] text-gray-400 font-black uppercase tracking-widest ml-4 mb-1 block">Locality</label>
+          {localities.length > 1 ? (
+            <select
+              name="locality"
+              value={formData.locality || ""}
+              onChange={handleChange}
+              className="w-full bg-gray-50 border-2 border-gray-100 rounded-[1.5rem] px-6 py-4 focus:bg-white focus:border-blue-600 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none font-bold text-gray-900 appearance-none bg-no-repeat bg-[right_1.5rem_center] cursor-pointer"
+              required
+            >
+              <option value="">Select Locality</option>
+              {localities.map((loc, idx) => (
+                <option key={idx} value={loc.Name}>
+                  {loc.Name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type="text"
+              name="locality"
+              value={formData.locality || ""}
+              onChange={handleChange}
+              placeholder="Locality"
+              className="w-full bg-gray-50 border-2 border-gray-100 rounded-[1.5rem] px-6 py-4 focus:bg-white focus:border-blue-600 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none font-bold text-gray-900"
+              required
+            />
+          )}
+        </div>
+      </div>
 
-      {/* Locality / City / State */}
-      {localities.length > 1 ? (
-        <select
-          name="locality"
-          value={formData.locality || ""}
-          onChange={handleChange}
-          className="w-full border rounded px-3 py-2"
-          required
-        >
-          <option value="">Select Locality</option>
-          {localities.map((loc, idx) => (
-            <option key={idx} value={loc.Name}>
-              {loc.Name}
-            </option>
-          ))}
-        </select>
-      ) : (
-        <input
-          type="text"
-          name="locality"
-          value={formData.locality || ""}
-          onChange={handleChange}
-          placeholder="Locality"
-          className="w-full border rounded px-3 py-2"
-          required
-        />
+      {/* Serviceability Message */}
+      {formData.serviceable === false && (
+        <div className="p-4 bg-red-50 rounded-2xl border border-red-100 flex gap-3 items-center">
+          <span className="text-xl">❌</span>
+          <p className="text-xs text-red-600 font-bold uppercase tracking-tight">Delivery unavailable at this Pincode</p>
+        </div>
+      )}
+      {formData.serviceable === true && (
+        <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 flex gap-3 items-center">
+          <span className="text-xl">✅</span>
+          <p className="text-xs text-emerald-600 font-bold uppercase tracking-tight">Delivery available (Prepaid only)</p>
+        </div>
       )}
 
-      <input
-        type="text"
-        name="city"
-        value={formData.city}
-        onChange={handleChange}
-        placeholder="City"
-        className="w-full border rounded px-3 py-2"
-        required
-      />
-      <input
-        type="text"
-        name="district"
-        value={formData.district}
-        onChange={handleChange}
-        placeholder="District"
-        className="w-full border rounded px-3 py-2"
-        required
-      />
-      <input
-        type="text"
-        name="state"
-        value={formData.state}
-        onChange={handleChange}
-        placeholder="State"
-        className="w-full border rounded px-3 py-2"
-        required
-      />
-      <input
-        type="text"
-        name="country"
-        value={formData.country}
-        onChange={handleChange}
-        placeholder="Country"
-        className="w-full border rounded px-3 py-2"
-        required
-      />
-      <input
-        type="text"
-        name="phone_number"
-        value={formData.phone_number}
-        onChange={handleChange}
-        placeholder="Phone Number"
-        className="w-full border rounded px-3 py-2"
-        required
-      />
+      {/* Region Grid 2 */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div>
+          <label className="text-[10px] text-gray-400 font-black uppercase tracking-widest ml-4 mb-1 block">City</label>
+          <input
+            type="text"
+            name="city"
+            value={formData.city}
+            onChange={handleChange}
+            placeholder="City"
+            className="w-full bg-gray-50 border-2 border-gray-100 rounded-[1.5rem] px-6 py-4 focus:bg-white focus:border-blue-600 transition-all outline-none font-bold text-gray-900"
+            required
+          />
+        </div>
+        <div>
+          <label className="text-[10px] text-gray-400 font-black uppercase tracking-widest ml-4 mb-1 block">State</label>
+          <input
+            type="text"
+            name="state"
+            value={formData.state}
+            onChange={handleChange}
+            placeholder="State"
+            className="w-full bg-gray-50 border-2 border-gray-100 rounded-[1.5rem] px-6 py-4 focus:bg-white focus:border-blue-600 transition-all outline-none font-bold text-gray-900"
+            required
+          />
+        </div>
+        <div>
+          <label className="text-[10px] text-gray-400 font-black uppercase tracking-widest ml-4 mb-1 block">Country</label>
+          <input
+            type="text"
+            name="country"
+            value={formData.country}
+            onChange={handleChange}
+            placeholder="Country"
+            className="w-full bg-gray-50 border-2 border-gray-100 rounded-[1.5rem] px-6 py-4 focus:bg-white focus:border-blue-600 transition-all outline-none font-bold text-gray-900"
+            required
+          />
+        </div>
+      </div>
+
+      {/* Phone Number */}
+      <div>
+        <label className="text-[10px] text-gray-400 font-black uppercase tracking-widest ml-4 mb-1 block">Phone Number</label>
+        <div className="flex bg-gray-50 border-2 border-gray-100 rounded-[1.5rem] px-6 py-4 focus-within:bg-white focus-within:border-blue-600 focus-within:ring-4 focus-within:ring-blue-500/10 transition-all">
+          <span className="text-gray-400 font-bold mr-3 border-r pr-3 border-gray-200">+91</span>
+          <input
+            type="text"
+            name="phone_number"
+            value={formData.phone_number}
+            onChange={handleChange}
+            placeholder="9876543210"
+            className="bg-transparent w-full outline-none font-bold text-gray-900"
+            required
+          />
+        </div>
+      </div>
 
       {/* Actions */}
-      <div className="flex justify-end gap-3">
+      <div className="flex flex-col sm:flex-row sm:justify-end gap-3 pt-6">
         <button
           type="button"
           onClick={onCancel}
-          className="px-4 py-2 text-gray-600 border rounded hover:bg-gray-100"
+          className="px-8 py-4 text-gray-500 font-bold rounded-2xl hover:bg-gray-100 transition active:scale-[0.98]"
           disabled={loading}
         >
           Cancel
         </button>
         <button
           type="submit"
-          className={`px-4 py-2 text-white rounded ${
-            formData.serviceable === false
+          className={`px-10 py-4 text-white rounded-[1.5rem] font-black shadow-lg transition-all active:scale-[0.98] ${formData.serviceable === false
               ? "bg-gray-400 cursor-not-allowed"
-              : "bg-blue-600 hover:bg-blue-700"
-          }`}
+              : "bg-gray-900 hover:bg-gray-800 shadow-gray-200"
+            }`}
           disabled={loading || formData.serviceable === false}
         >
-          {loading ? "Saving..." : "Save"}
+          {loading ? (
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+              <span>Saving...</span>
+            </div>
+          ) : "Save Address"}
         </button>
       </div>
     </form>

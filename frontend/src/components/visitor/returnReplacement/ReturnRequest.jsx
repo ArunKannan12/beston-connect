@@ -36,7 +36,7 @@ const ReturnRequest = () => {
     const fetchData = async () => {
       if (!returnId && !orderNumber) {
         toast.error("No order specified");
-        navigate("/orders");
+        navigate("/orders/");
         return;
       }
 
@@ -57,7 +57,7 @@ const ReturnRequest = () => {
             setCustomReason(reason);
           }
         } else if (orderNumber) {
-          const res = await axiosInstance.get(`/orders/${orderNumber}/`);
+          const res = await axiosInstance.get(`/order-details/${orderNumber}/`);
           setOrder(res.data);
         }
       } catch (err) {
@@ -136,8 +136,8 @@ const ReturnRequest = () => {
   if (!order) return <p className="text-center py-10">Order not found</p>;
 
   console.log(request);
-  
-  
+
+
   // ----------------- VIEW EXISTING RETURN REQUEST -----------------
   if (request) {
     return (
@@ -200,8 +200,8 @@ const ReturnRequest = () => {
                 {refundLoading
                   ? "Validating refund with Razorpay..."
                   : refundProcessed
-                  ? "Refund confirmed."
-                  : "Click button to check refund status."
+                    ? "Refund confirmed."
+                    : "Click button to check refund status."
                 }
               </button>
             )}

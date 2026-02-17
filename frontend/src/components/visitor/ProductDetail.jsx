@@ -6,7 +6,7 @@ import ProductDetailShimmer from '../../shimmer/ProductDetailShimmer';
 import { useAddToCartMutation, useGetCartQuery } from '../../contexts/cartSlice';
 import { useAuth } from '../../contexts/authContext';
 import VariantDropdown from '../helpers/VariantDropDown';
-
+import ProductRatings from './ProductRating';
 
 
 const CLICK_REF_KEY = "click_referral_code";         // For click tracking only
@@ -397,7 +397,6 @@ const handleBuyNow = () => {
       ) : (
         <p className="text-red-600 font-bold mt-2">Out of Stock</p>
       )}
-
       {/* Return & Replacement Info */}
       {selectedVariant && (
         <div className="mt-6 bg-gray-50 border rounded-xl p-4 sm:p-5 text-sm text-gray-700 space-y-2">
@@ -471,7 +470,7 @@ const handleBuyNow = () => {
       return (
         <div
           key={rp.id}
-          className="group relative bg-white border rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 overflow-hidden cursor-pointer flex flex-col"
+          className="group relative bg-white  rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 overflow-hidden cursor-pointer flex flex-col"
           onClick={() => {
             const variantName = encodeURIComponent(rp.variants[0]?.variant_name || '');
             navigate(`/products/${rp.slug}/?variant=${variantName}`);
@@ -524,6 +523,9 @@ const handleBuyNow = () => {
     })}
   </div>
 
+    <div className="mt-12 px-4 sm:px-6 lg:px-12">
+    <ProductRatings productId={selectedVariant?.id} />
+  </div>
   {/* Add bottom spacer for mobile so last row isn't hidden */}
   <div className="h-[100px] sm:hidden"></div>
 </div>

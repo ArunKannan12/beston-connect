@@ -4,14 +4,21 @@ import axiosInstance from "../../../api/axiosinstance";
 import { toast } from "react-toastify";
 import { motion } from "framer-motion";
 import {
-  FaEdit,
-  FaTrash,
-  FaPlus,
-  FaSearch,
-  FaThLarge,
-} from "react-icons/fa";
+  Edit,
+  Trash2,
+  Plus,
+  Search,
+  Grid3x3,
+  Folder,
+  MoreVertical,
+  Eye,
+  EyeOff,
+  Package,
+  Image as ImageIcon,
+} from "lucide-react";
 import CategoryModal from "../modals/CategoryModal";
 import ConfirmDelete from "../helpers/ConfirmDelete";
+import AdminCategoriesShimmer from "../../../shimmer/AdminCategoriesShimmer";
 
 const AdminCategories = () => {
   const [categories, setCategories] = useState([]);
@@ -19,8 +26,9 @@ const AdminCategories = () => {
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState(null); // ✅ track category to delete
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [viewMode, setViewMode] = useState("grid"); // grid or list
 
   // ----------------- Fetch categories -----------------
   const fetchCategories = async () => {
@@ -57,104 +65,189 @@ const AdminCategories = () => {
   };
 
   return (
-    <div className="p-6 bg-gray-50 min-h-screen relative">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col lg:flex-row justify-between items-center gap-4 mb-6">
-        <h2 className="text-3xl font-bold text-gray-800 flex items-center gap-2">
-          <FaThLarge className="text-blue-500" /> Categories
-        </h2>
+      <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
+            <Folder className="w-8 h-8 text-blue-600" />
+            Categories Management
+          </h1>
+          <p className="text-gray-500 mt-1">Manage your product categories and organization</p>
+        </div>
+        
+        <div className="flex items-center gap-3 w-full lg:w-auto">
+          <button
+            onClick={() => {
+              setSelectedCategory(null);
+              setShowAddModal(true);
+            }}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            Add Category
+          </button>
+        </div>
+      </div>
 
-        <div className="flex flex-wrap gap-3 items-center w-full lg:w-auto">
+      {/* Search and Filters Bar */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4">
+        <div className="flex flex-col lg:flex-row gap-4">
           {/* Search */}
-          <div className="relative flex-1 min-w-[200px]">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
             <input
               type="text"
-              placeholder="Search categories..."
+              placeholder="Search categories by name or slug..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border rounded-lg shadow-sm focus:ring-2 focus:ring-blue-400 outline-none"
+              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
             />
-            <FaSearch className="absolute left-3 top-3 text-gray-400" />
+          </div>
+
+          {/* View Mode Toggle */}
+          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
+            <button
+              onClick={() => setViewMode("grid")}
+              className={`p-2 rounded ${viewMode === "grid" ? "bg-white shadow-sm" : ""}`}
+            >
+              <Grid3x3 className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setViewMode("list")}
+              className={`p-2 rounded ${viewMode === "list" ? "bg-white shadow-sm" : ""}`}
+            >
+              <Package className="w-4 h-4" />
+            </button>
           </div>
         </div>
       </div>
 
-      {/* Categories Grid */}
+      {/* Categories Display */}
       {loading ? (
-        <p className="text-center text-gray-500">Loading categories...</p>
+        <AdminCategoriesShimmer />
       ) : categories.length === 0 ? (
-        <p className="text-center text-gray-500">No categories found.</p>
+        <div className="text-center py-12">
+          <Folder className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+          <h3 className="text-lg font-medium text-gray-900 mb-2">No categories found</h3>
+          <p className="text-gray-500">Try adjusting your search or create a new category</p>
+        </div>
       ) : (
-        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+        <div className={viewMode === "grid" 
+          ? "grid gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" 
+          : "space-y-4"
+        }>
           {categories.map((c, i) => (
             <motion.div
               key={c.slug}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: i * 0.05 }}
-              className="bg-white rounded-xl shadow-md hover:shadow-xl transition-all overflow-hidden flex flex-col relative"
+              className={viewMode === "grid" 
+                ? "bg-white rounded-xl border border-gray-200 overflow-hidden hover:shadow-lg transition-all relative group"
+                : "bg-white rounded-xl border border-gray-200 p-4 hover:shadow-lg transition-all relative group"
+              }
             >
-              {/* Category Image */}
-            <div className="w-full aspect-[4/3] bg-gray-100 flex items-center justify-center">
-              {c.image_url ? (
-                <img
-                  src={c.image_url}
-                  alt={c.name}
-                  className="w-full h-full object-cover rounded-t-xl"
-                />
+              {viewMode === "grid" ? (
+                <>
+                  {/* Category Image */}
+                  <div className="relative w-full aspect-[4/3] bg-gray-100 overflow-hidden">
+                    {c.image_url ? (
+                      <img
+                        src={c.image_url}
+                        alt={c.name}
+                        className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center">
+                        <ImageIcon className="w-12 h-12 text-gray-400" />
+                      </div>
+                    )}
+                    
+                    {/* Quick Actions Overlay */}
+                    <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => {
+                            setSelectedCategory(c);
+                            setShowAddModal(true);
+                          }}
+                          className="w-8 h-8 bg-white/90 backdrop-blur-sm rounded-lg flex items-center justify-center hover:bg-white transition-colors shadow-sm"
+                        >
+                          <Edit className="w-4 h-4 text-gray-700" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            setDeleteTarget(c);
+                            setShowDeleteModal(true);
+                          }}
+                          className="w-8 h-8 bg-white/90 backdrop-blur-sm rounded-lg flex items-center justify-center hover:bg-white transition-colors shadow-sm"
+                        >
+                          <Trash2 className="w-4 h-4 text-red-600" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Category Info */}
+                  <div className="p-4">
+                    <div className="flex flex-col gap-2">
+                      <h3 className="text-lg font-semibold text-gray-900 truncate">{c.name}</h3>
+                      <p className="text-sm text-gray-500 truncate">/{c.slug}</p>
+                    </div>
+                  </div>
+                </>
               ) : (
-                <span className="text-gray-500">No Image</span>
+                /* List View */
+                <div className="flex items-center gap-4">
+                  {/* Category Image */}
+                  <div className="w-16 h-16 bg-gray-100 rounded-lg overflow-hidden flex-shrink-0">
+                    {c.image_url ? (
+                      <img
+                        src={c.image_url}
+                        alt={c.name}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center">
+                        <ImageIcon className="w-8 h-8 text-gray-400" />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Category Info */}
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-lg font-semibold text-gray-900 truncate">{c.name}</h3>
+                    <p className="text-sm text-gray-500">/{c.slug}</p>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <button
+                      onClick={() => {
+                        setSelectedCategory(c);
+                        setShowAddModal(true);
+                      }}
+                      className="p-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors"
+                    >
+                      <Edit className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        setDeleteTarget(c);
+                        setShowDeleteModal(true);
+                      }}
+                      className="p-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
               )}
-            </div>
-
-              {/* Category Info */}
-              <div className="p-4 flex-1 flex flex-col justify-between">
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-800 truncate">
-                    {c.name}
-                  </h3>
-                  <p className="text-sm text-gray-500 truncate">{c.slug}</p>
-                </div>
-
-                {/* Actions */}
-                <div className="flex justify-end gap-3 mt-4 flex-wrap">
-                  <button
-                    onClick={() => {
-                      setSelectedCategory(c);
-                      setShowAddModal(true);
-                    }}
-                    className="text-blue-600 hover:text-blue-800"
-                    title="Edit"
-                  >
-                    <FaEdit />
-                  </button>
-                  <button
-                    onClick={() => {
-                      setDeleteTarget(c);
-                      setShowDeleteModal(true);
-                    }}
-                    className="text-red-600 hover:text-red-800"
-                    title="Delete"
-                  >
-                    <FaTrash />
-                  </button>
-                </div>
-              </div>
             </motion.div>
           ))}
         </div>
       )}
-
-      {/* Floating Add Button */}
-      <button
-        onClick={() => {
-          setSelectedCategory(null);
-          setShowAddModal(true);
-        }}
-        className="fixed bottom-6 right-6 bg-blue-600 hover:bg-blue-700 text-white p-4 rounded-full shadow-lg transition transform hover:scale-110"
-      >
-        <FaPlus />
-      </button>
 
       {/* Category Modal */}
       {showAddModal && (

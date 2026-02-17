@@ -8,6 +8,7 @@ import OrderTracker from "./orderDetail/OrderTracker";
 import OrderItemsList from "./orderDetail/OrderItemsList";
 import OrderSummary from "./orderDetail/OrderSummary";
 import ShippingInfo from "./orderDetail/ShippingInfo";
+import AddRating from "./orderDetail/AddRating";
 
 
 const OrderDetail = () => {
@@ -27,7 +28,7 @@ const OrderDetail = () => {
   useEffect(() => {
     if (authLoading) return;
     if (!isAuthenticated) {
-      navigate("/login", { state: { from: `/orders/${order_number}` } });
+      navigate("/login", { state: { from: `/order-detail/${order_number}` } });
     } else {
       fetchOrder();
     }
@@ -36,8 +37,10 @@ const OrderDetail = () => {
   const fetchOrder = async () => {
     setLoading(true);
     try {
-      const res = await axiosInstance.get(`orders/${order_number}/`);
+      const res = await axiosInstance.get(`order-detail/${order_number}/`);
       setOrder(res.data);
+      console.log(res.data);
+
     } catch (err) {
       toast.error(err.response?.data?.detail || "Failed to fetch order details");
       navigate("/orders");
@@ -121,6 +124,9 @@ const OrderDetail = () => {
           cancelLoading={cancelLoading}
           onTriggerCancelModal={() => setShowCancelModal(true)}
         />
+        {order.status === "delivered" && order.items.length > 0 && (
+          <AddRating productId={order.items[0].product_variant.id} />
+        )}
 
         {/* Common Order Tracker */}
         <div className="bg-white/60 backdrop-blur-md rounded-xl shadow-md border border-gray-200 p-6">
@@ -146,7 +152,7 @@ const OrderDetail = () => {
             }
           />
         </div>
-         
+
         {/* Cancel Modal */}
         {showCancelModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
@@ -186,11 +192,10 @@ const OrderDetail = () => {
                 <button
                   onClick={handleCancel}
                   disabled={cancelLoading}
-                  className={`px-4 py-2 rounded-lg transition ${
-                    cancelLoading
+                  className={`px-4 py-2 rounded-lg transition ${cancelLoading
                       ? "bg-red-400 text-white cursor-not-allowed"
                       : "bg-red-600 text-white hover:bg-red-700"
-                  }`}
+                    }`}
                 >
                   {cancelLoading ? "Cancelling..." : "Yes, Cancel"}
                 </button>

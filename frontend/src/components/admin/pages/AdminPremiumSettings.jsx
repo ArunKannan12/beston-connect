@@ -1,45 +1,61 @@
 import React, { useEffect, useState } from "react";
 import axiosInstance from "../../../api/axiosinstance";
 import { toast } from "react-toastify";
-import { FiEdit } from "react-icons/fi";
-import { MdDelete } from "react-icons/md";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  FiEdit,
+  FiDollarSign,
+  FiCalendar,
+  FiPercent,
+  FiSave,
+  FiX,
+  FiCheck,
+  FiAlertCircle,
+  FiTrendingUp,
+  FiClock,
+  FiTag
+} from "react-icons/fi";
 
 const AdminPremiumSettings = () => {
   const [data, setData] = useState(null);
   const [form, setForm] = useState({
-    amount: "",
-    offer_amount: "",
+    monthly_amount: "",
+    annual_amount: "",
+    monthly_offer: "",
+    annual_offer: "",
     offer_active: false,
     offer_start: "",
     offer_end: "",
   });
 
-  const [id, setId] = useState(null);
   const [editModal, setEditModal] = useState(false);
-  const [deleteModal, setDeleteModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [errors, setErrors] = useState({});
 
-  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const today = new Date().toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
 
   // ---------------------------
   // FETCH SETTINGS
   // ---------------------------
   const fetchSettings = async () => {
     setLoading(true);
+    setErrors({});
     try {
-      const res = await axiosInstance.get("promoter/premium-amount/");
+      const res = await axiosInstance.get("premium-settings/");
       setData(res.data || null);
-      if (res.data?.id) setId(res.data.id);
       setForm({
-        amount: res.data?.amount || "",
-        offer_amount: res.data?.offer_amount || "",
+        monthly_amount: res.data?.monthly_amount || "",
+        annual_amount: res.data?.annual_amount || "",
+        monthly_offer: res.data?.monthly_offer || "",
+        annual_offer: res.data?.annual_offer || "",
         offer_active: res.data?.offer_active || false,
-        offer_start: res.data?.offer_start || "",
-        offer_end: res.data?.offer_end || "",
+        offer_start: res.data?.offer_start ? res.data.offer_start.slice(0, 16) : "",
+        offer_end: res.data?.offer_end ? res.data.offer_end.slice(0, 16) : "",
       });
     } catch (error) {
       console.error("Fetch error:", error);
+      toast.error("Failed to fetch premium settings");
     } finally {
       setLoading(false);
     }
@@ -55,267 +71,512 @@ const AdminPremiumSettings = () => {
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
     setForm({ ...form, [name]: type === "checkbox" ? checked : value });
+    // Clear error for this field when user starts typing
+    if (errors[name]) {
+      setErrors({ ...errors, [name]: "" });
+    }
   };
 
-  const combineDateTime = (date, time, defaultTime) => {
-    const t = time || defaultTime;
-    return `${date}T${t}:00Z`;
+  // ---------------------------
+  // VALIDATION
+  // ---------------------------
+  const validateForm = () => {
+    const newErrors = {};
+
+    // Validate required fields
+    if (!form.monthly_amount || parseFloat(form.monthly_amount) <= 0) {
+      newErrors.monthly_amount = "Monthly amount is required and must be greater than 0";
+    }
+
+    if (!form.annual_amount || parseFloat(form.annual_amount) <= 0) {
+      newErrors.annual_amount = "Annual amount is required and must be greater than 0";
+    }
+
+    // Validate offer logic
+    if (form.offer_active) {
+      if (!form.offer_start) {
+        newErrors.offer_start = "Offer start time is required when offer is active";
+      }
+      if (!form.offer_end) {
+        newErrors.offer_end = "Offer end time is required when offer is active";
+      }
+      if (form.offer_start && form.offer_end && form.offer_start >= form.offer_end) {
+        newErrors.offer_end = "Offer end time must be after start time";
+      }
+    }
+
+    // Validate offer prices
+    if (form.monthly_offer && parseFloat(form.monthly_offer) >= parseFloat(form.monthly_amount)) {
+      newErrors.monthly_offer = "Monthly offer must be less than regular monthly amount";
+    }
+
+    if (form.annual_offer && parseFloat(form.annual_offer) >= parseFloat(form.annual_amount)) {
+      newErrors.annual_offer = "Annual offer must be less than regular annual amount";
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
   };
 
   // ---------------------------
   // CREATE / UPDATE
   // ---------------------------
   const handleSubmit = async () => {
-  setSaving(true);
-  try {
-    // If offer is active, ensure start and end datetime exist
-    const now = new Date();
-    const defaultStart = now.toISOString().slice(0, 10) + "T00:00:00Z";
-    const defaultEnd = now.toISOString().slice(0, 10) + "T23:59:00Z";
-
-    const payload = {
-      ...form,
-      offer_start: form.offer_active
-        ? form.offer_start || defaultStart
-        : null,
-      offer_end: form.offer_active
-        ? form.offer_end || defaultEnd
-        : null,
-    };
-    console.log('payloas',payload);
-    
-    if (id) {
-      await axiosInstance.patch(
-        `admin/promoter/edit-premium-amt/${id}/`,
-        payload
-      );
-      toast.success("Premium settings updated successfully!");
-    } else {
-      await axiosInstance.post(
-        "admin/promoter/create-premium-amt/",
-        payload
-      );
-      toast.success("Premium settings created successfully!");
+    if (!validateForm()) {
+      toast.error("Please fix the validation errors");
+      return;
     }
 
-    setEditModal(false);
-    fetchSettings();
-  } catch (error) {
-    console.error(error);
-    let msg = "Something went wrong";
-    if (error.response?.data) {
-      const data = error.response.data;
-      if (typeof data === "string") msg = data;
-      else if (data.detail) msg = data.detail;
-      else msg = Object.values(data).flat().join(" ");
-    }
-    toast.error(msg);
-  } finally {
-    setSaving(false);
-  }
-};
-
-
-  // ---------------------------
-  // DELETE
-  // ---------------------------
-  const handleDelete = async () => {
+    setSaving(true);
     try {
-      await axiosInstance.delete(`admin/promoter/edit-premium-amt/${id}/`);
-      toast.success("Premium settings deleted");
-      setData(null);
-      setId(null);
-      setDeleteModal(false);
-      setEditModal(true);
-      setForm({
-        amount: "",
-        offer_amount: "",
-        offer_active: false,
-        offer_start: "",
-        offer_end: "",
-      });
-    } catch {
-      toast.error("Delete failed");
+      const payload = {
+        monthly_amount: parseFloat(form.monthly_amount),
+        annual_amount: parseFloat(form.annual_amount),
+        offer_active: form.offer_active,
+        monthly_offer: form.monthly_offer ? parseFloat(form.monthly_offer) : null,
+        annual_offer: form.annual_offer ? parseFloat(form.annual_offer) : null,
+        offer_start: form.offer_active ? form.offer_start : null,
+        offer_end: form.offer_active ? form.offer_end : null,
+      };
+
+      await axiosInstance.patch("premium-settings/", payload);
+      toast.success("Premium settings saved successfully!");
+
+      setEditModal(false);
+      fetchSettings();
+    } catch (error) {
+      console.error(error);
+      let msg = "Something went wrong";
+      if (error.response?.data) {
+        const data = error.response.data;
+        if (typeof data === "string") msg = data;
+        else if (data.detail) msg = data.detail;
+        else if (typeof data === "object") {
+          // Handle field-specific errors from API
+          setErrors(data);
+          msg = Object.values(data).flat().join(" ");
+        }
+      }
+      toast.error(msg);
+    } finally {
+      setSaving(false);
     }
   };
+
+
+
 
   // ---------------------------
   // VIEW MODE
   // ---------------------------
   if (!editModal && data) {
     return (
-      <div className="max-w-xl mx-auto bg-white p-6 rounded-xl shadow relative">
-        <h2 className="text-2xl font-bold mb-4">Premium Settings</h2>
-
-        <p>
-          <strong>Amount:</strong> ₹{data.amount}
-        </p>
-        <p>
-          <strong>Offer Amount:</strong> {data.offer_amount || "—"}
-        </p>
-        <p>
-          <strong>Offer Active:</strong> {data.offer_active ? "Yes" : "No"}
-        </p>
-        <p>
-          <strong>Start:</strong>{" "}
-          {data.offer_start ? new Date(data.offer_start).toLocaleString() : "—"}
-        </p>
-        <p>
-          <strong>End:</strong>{" "}
-          {data.offer_end ? new Date(data.offer_end).toLocaleString() : "—"}
-        </p>
-
-        {/* Edit & Delete Buttons */}
-        <div className="absolute bottom-5 right-5 flex flex-col gap-2">
-          <button
-            onClick={() => setEditModal(true)}
-            className="bg-blue-600 text-white p-3 rounded-full shadow-lg"
-          >
-            <FiEdit size={20} />
-          </button>
-          <button
-            onClick={() => setDeleteModal(true)}
-            className="bg-red-600 text-white p-3 rounded-full shadow-lg"
-          >
-            <MdDelete size={20} />
-          </button>
-        </div>
-
-        {deleteModal && (
-          <div className="fixed inset-0 bg-opacity-50 backdrop-blur flex items-center justify-center z-50">
-            <div className="bg-white p-6 rounded-xl shadow-lg w-96 text-center">
-              <h3 className="text-lg font-bold mb-4">Confirm Delete</h3>
-              <p>Are you sure you want to delete this premium setting?</p>
-              <div className="mt-5 flex justify-center gap-4">
-                <button
-                  onClick={handleDelete}
-                  className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
-                >
-                  Delete
-                </button>
-                <button
-                  onClick={() => setDeleteModal(false)}
-                  className="bg-gray-300 px-4 py-2 rounded hover:bg-gray-400"
-                >
-                  Cancel
-                </button>
+      <div className="max-w-4xl mx-auto p-6">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-gradient-to-br from-white via-slate-50 to-white rounded-2xl shadow-xl border border-slate-200/50 overflow-hidden"
+        >
+          {/* Header */}
+          <div className="bg-gradient-to-r from-blue-600 to-indigo-600 px-8 py-6 text-white">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div className="p-3 bg-white/20 rounded-xl backdrop-blur-sm">
+                  <FiDollarSign className="w-8 h-8" />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold">Premium Settings</h2>
+                  <p className="text-blue-100 text-sm mt-1">Manage subscription pricing and offers</p>
+                </div>
               </div>
+              <motion.button
+                onClick={() => setEditModal(true)}
+                className="bg-white/20 hover:bg-white/30 text-white p-3 rounded-xl backdrop-blur-sm transition-all"
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+              >
+                <FiEdit size={20} />
+              </motion.button>
             </div>
           </div>
-        )}
+
+          {/* Content */}
+          <div className="p-8">
+            {/* Pricing Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+              {/* Monthly Pricing */}
+              <motion.div
+                className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl p-6 border border-blue-200/50"
+                whileHover={{ y: -2 }}
+                transition={{ type: "spring", stiffness: 300, damping: 20 }}
+              >
+                <div className="flex items-center gap-3 mb-4">
+                  <FiCalendar className="w-6 h-6 text-blue-600" />
+                  <h3 className="text-lg font-semibold text-gray-800">Monthly Plan</h3>
+                </div>
+                <div className="space-y-3">
+                  <div>
+                    <p className="text-sm text-gray-600">Regular Price</p>
+                    <p className="text-2xl font-bold text-gray-900">₹{data.monthly_amount}</p>
+                  </div>
+                  {data.current_monthly !== data.monthly_amount && (
+                    <div>
+                      <p className="text-sm text-gray-600">Current Price</p>
+                      <p className="text-2xl font-bold text-green-600">₹{data.current_monthly}</p>
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+
+              {/* Annual Pricing */}
+              <motion.div
+                className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-2xl p-6 border border-emerald-200/50"
+                whileHover={{ y: -2 }}
+                transition={{ type: "spring", stiffness: 300, damping: 20 }}
+              >
+                <div className="flex items-center gap-3 mb-4">
+                  <FiTrendingUp className="w-6 h-6 text-emerald-600" />
+                  <h3 className="text-lg font-semibold text-gray-800">Annual Plan</h3>
+                </div>
+                <div className="space-y-3">
+                  <div>
+                    <p className="text-sm text-gray-600">Regular Price</p>
+                    <p className="text-2xl font-bold text-gray-900">₹{data.annual_amount}</p>
+                  </div>
+                  {data.current_annual !== data.annual_amount && (
+                    <div>
+                      <p className="text-sm text-gray-600">Current Price</p>
+                      <p className="text-2xl font-bold text-green-600">₹{data.current_annual}</p>
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            </div>
+
+            {/* Offer Status */}
+            <motion.div
+              className={`rounded-2xl p-6 border ${
+                data.offer_active
+                  ? 'bg-gradient-to-br from-green-50 to-emerald-50 border-green-200/50'
+                  : 'bg-gradient-to-br from-gray-50 to-slate-50 border-gray-200/50'
+              }`}
+              whileHover={{ y: -2 }}
+              transition={{ type: "spring", stiffness: 300, damping: 20 }}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className={`p-2 rounded-xl ${
+                    data.offer_active ? 'bg-green-100' : 'bg-gray-100'
+                  }`}>
+                    <FiTag className={`w-5 h-5 ${
+                      data.offer_active ? 'text-green-600' : 'text-gray-600'
+                    }`} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-800">Offer Status</h3>
+                    <p className={`text-sm ${
+                      data.offer_active ? 'text-green-600' : 'text-gray-600'
+                    }`}>
+                      {data.offer_active ? 'Active' : 'Inactive'}
+                    </p>
+                  </div>
+                </div>
+                {data.offer_active && (
+                  <div className="text-right">
+                    <p className="text-sm text-gray-600">Offer Period</p>
+                    <p className="text-sm font-medium text-gray-800">
+                      {new Date(data.offer_start).toLocaleDateString()} - {new Date(data.offer_end).toLocaleDateString()}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        </motion.div>
       </div>
     );
   }
-
-  // ---------------------------
-  // NO DATA: SHOW PEN ICON
-  // ---------------------------
-  if (!editModal && !data) {
-    return (
-      <div className="flex flex-col justify-center items-center h-64 bg-gray-50 rounded-lg shadow-md p-6 text-center space-y-4">
-        <div className="text-blue-600 text-6xl">
-          <FiEdit />
-        </div>
-        <h2 className="text-xl font-semibold text-gray-800">
-          No Premium Amount Set
-        </h2>
-        <p className="text-gray-600">
-          You haven’t added any premium settings yet. Click the button below to create one.
-        </p>
-        <button
-          onClick={() => setEditModal(true)}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-md shadow-md transition"
-        >
-          Add Premium Settings
-        </button>
-      </div>
-    );
-  }
-
 
   // ---------------------------
   // EDIT / CREATE MODAL
   // ---------------------------
   return (
-    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-      <div className="bg-white p-6 rounded-xl shadow-lg w-96 relative">
-        <h2 className="text-xl font-bold mb-4">
-          {id ? "Edit Premium Settings" : "Create Premium Settings"}
-        </h2>
+    <AnimatePresence>
+      <motion.div
+        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gradient-to-br from-slate-900/20 to-slate-800/20 backdrop-blur-md"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+      >
+        <motion.div
+          className="relative w-full max-w-2xl bg-gradient-to-br from-white via-slate-50 to-white rounded-2xl shadow-2xl border border-slate-200/50 overflow-hidden max-h-[90vh]"
+          initial={{ scale: 0.95, opacity: 0, y: 20 }}
+          animate={{ scale: 1, opacity: 1, y: 0 }}
+          exit={{ scale: 0.95, opacity: 0, y: 20 }}
+          transition={{ type: "spring", damping: 20, stiffness: 300 }}
+        >
+          {/* Header */}
+          <div className="relative bg-gradient-to-r from-blue-600 to-indigo-600 px-8 py-6 text-white">
+            <button
+              onClick={() => setEditModal(false)}
+              className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors p-2 hover:bg-white/10 rounded-lg"
+            >
+              <FiX className="w-6 h-6" />
+            </button>
+            
+            <div className="flex items-center gap-4">
+              <div className="p-3 bg-white/20 rounded-xl backdrop-blur-sm">
+                <FiDollarSign className="w-8 h-8" />
+              </div>
+              <div>
+                <h2 className="text-2xl font-bold text-white">Premium Settings</h2>
+                <p className="text-blue-100 text-sm mt-1">Configure subscription pricing and offers</p>
+              </div>
+            </div>
+          </div>
 
-        <label className="block mb-1 font-semibold">Premium Amount</label>
-        <input
-          type="number"
-          name="amount"
-          value={form.amount}
-          onChange={handleChange}
-          className="w-full border p-2 mb-4 rounded"
-        />
+          {/* Form Content */}
+          <div className="p-8 overflow-y-auto max-h-[calc(90vh-200px)]">
+            {/* Pricing Section */}
+            <div className="mb-8">
+              <h3 className="text-lg font-semibold text-gray-800 mb-6 flex items-center gap-2">
+                <FiDollarSign className="w-5 h-5 text-blue-600" />
+                Pricing Configuration
+              </h3>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Monthly Amount */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Monthly Amount <span className="text-red-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₹</span>
+                    <input
+                      type="number"
+                      name="monthly_amount"
+                      value={form.monthly_amount}
+                      onChange={handleChange}
+                      className={`w-full pl-8 pr-3 py-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${
+                        errors.monthly_amount ? 'border-red-500' : 'border-gray-300'
+                      }`}
+                      placeholder="199"
+                      step="0.01"
+                      min="0"
+                    />
+                  </div>
+                  {errors.monthly_amount && (
+                    <p className="mt-1 text-sm text-red-600 flex items-center gap-1">
+                      <FiAlertCircle className="w-4 h-4" />
+                      {errors.monthly_amount}
+                    </p>
+                  )}
+                </div>
 
-        <label className="block mb-1 font-semibold">Offer Amount</label>
-        <input
-          type="number"
-          name="offer_amount"
-          value={form.offer_amount || ""}
-          onChange={handleChange}
-          className="w-full border p-2 mb-4 rounded"
-        />
+                {/* Annual Amount */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Annual Amount <span className="text-red-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₹</span>
+                    <input
+                      type="number"
+                      name="annual_amount"
+                      value={form.annual_amount}
+                      onChange={handleChange}
+                      className={`w-full pl-8 pr-3 py-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${
+                        errors.annual_amount ? 'border-red-500' : 'border-gray-300'
+                      }`}
+                      placeholder="1999"
+                      step="0.01"
+                      min="0"
+                    />
+                  </div>
+                  {errors.annual_amount && (
+                    <p className="mt-1 text-sm text-red-600 flex items-center gap-1">
+                      <FiAlertCircle className="w-4 h-4" />
+                      {errors.annual_amount}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
 
-        <label className="flex items-center gap-2 mb-4">
-          <input
-            type="checkbox"
-            name="offer_active"
-            checked={form.offer_active}
-            onChange={handleChange}
-          />
-          Activate Offer
-        </label>
+            {/* Offer Section */}
+            <div className="mb-8">
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+                  <FiTag className="w-5 h-5 text-green-600" />
+                  Offer Configuration
+                </h3>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    name="offer_active"
+                    checked={form.offer_active}
+                    onChange={handleChange}
+                    className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500"
+                  />
+                  <span className="text-sm font-medium text-gray-700">Activate Offer</span>
+                </label>
+              </div>
 
-        {/* Offer Start */}
-        <label className="block mb-1 font-semibold">Offer Start</label>
-        <input
-          type="datetime-local"
-          name="offer_start"
-          value={
-            form.offer_start
-              ? form.offer_start.slice(0, 16)
-              : `${today}T00:00`
-          }
-          onChange={(e) =>
-            setForm({ ...form, offer_start: e.target.value })
-          }
-          className="w-full border p-2 mb-4 rounded"
-        />
+              {form.offer_active && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="space-y-6"
+                >
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Monthly Offer */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Monthly Offer Price
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₹</span>
+                        <input
+                          type="number"
+                          name="monthly_offer"
+                          value={form.monthly_offer}
+                          onChange={handleChange}
+                          className={`w-full pl-8 pr-3 py-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all ${
+                            errors.monthly_offer ? 'border-red-500' : 'border-gray-300'
+                          }`}
+                          placeholder="149"
+                          step="0.01"
+                          min="0"
+                        />
+                      </div>
+                      {errors.monthly_offer && (
+                        <p className="mt-1 text-sm text-red-600 flex items-center gap-1">
+                          <FiAlertCircle className="w-4 h-4" />
+                          {errors.monthly_offer}
+                        </p>
+                      )}
+                    </div>
 
-        {/* Offer End */}
-        <label className="block mb-1 font-semibold">Offer End</label>
-        <input
-          type="datetime-local"
-          name="offer_end"
-          value={
-            form.offer_end ? form.offer_end.slice(0, 16) : `${today}T23:59`
-          }
-          onChange={(e) => setForm({ ...form, offer_end: e.target.value })}
-          className="w-full border p-2 mb-4 rounded"
-        />
+                    {/* Annual Offer */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Annual Offer Price
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₹</span>
+                        <input
+                          type="number"
+                          name="annual_offer"
+                          value={form.annual_offer}
+                          onChange={handleChange}
+                          className={`w-full pl-8 pr-3 py-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all ${
+                            errors.annual_offer ? 'border-red-500' : 'border-gray-300'
+                          }`}
+                          placeholder="1499"
+                          step="0.01"
+                          min="0"
+                        />
+                      </div>
+                      {errors.annual_offer && (
+                        <p className="mt-1 text-sm text-red-600 flex items-center gap-1">
+                          <FiAlertCircle className="w-4 h-4" />
+                          {errors.annual_offer}
+                        </p>
+                      )}
+                    </div>
+                  </div>
 
-        <div className="flex justify-end gap-3 mt-4">
-          <button
-            onClick={() => setEditModal(false)}
-            className="bg-gray-300 px-4 py-2 rounded hover:bg-gray-400"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSubmit}
-            disabled={saving}
-            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-          >
-            {saving ? "Saving..." : id ? "Update" : "Save"}
-          </button>
-        </div>
-      </div>
-    </div>
+                  {/* Offer Dates */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Offer Start */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Offer Start <span className="text-red-500">*</span>
+                      </label>
+                      <div className="relative">
+                        <FiCalendar className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+                        <input
+                          type="datetime-local"
+                          name="offer_start"
+                          value={form.offer_start || today}
+                          onChange={handleChange}
+                          className={`w-full pl-10 pr-3 py-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all ${
+                            errors.offer_start ? 'border-red-500' : 'border-gray-300'
+                          }`}
+                        />
+                      </div>
+                      {errors.offer_start && (
+                        <p className="mt-1 text-sm text-red-600 flex items-center gap-1">
+                          <FiAlertCircle className="w-4 h-4" />
+                          {errors.offer_start}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Offer End */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Offer End <span className="text-red-500">*</span>
+                      </label>
+                      <div className="relative">
+                        <FiCalendar className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+                        <input
+                          type="datetime-local"
+                          name="offer_end"
+                          value={form.offer_end || today}
+                          onChange={handleChange}
+                          className={`w-full pl-10 pr-3 py-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all ${
+                            errors.offer_end ? 'border-red-500' : 'border-gray-300'
+                          }`}
+                        />
+                      </div>
+                      {errors.offer_end && (
+                        <p className="mt-1 text-sm text-red-600 flex items-center gap-1">
+                          <FiAlertCircle className="w-4 h-4" />
+                          {errors.offer_end}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex justify-end gap-3 mt-8">
+              <motion.button
+                onClick={() => setEditModal(false)}
+                className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-medium transition-all"
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+              >
+                Cancel
+              </motion.button>
+              <motion.button
+                onClick={handleSubmit}
+                disabled={saving}
+                className="px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+              >
+                {saving ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <FiSave className="w-5 h-5" />
+                    Save Settings
+                  </>
+                )}
+              </motion.button>
+            </div>
+          </div>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
   );
 };
 

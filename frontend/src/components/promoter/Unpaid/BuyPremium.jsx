@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import axiosInstance from "../../../api/axiosinstance";
 import { toast } from "react-toastify";
 
-const BuyPremium = () => {
+const BuyPremium = ({ selectedPlan = "monthly" }) => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
 
@@ -20,13 +20,15 @@ const BuyPremium = () => {
   useEffect(() => {
     const becomePremium = async () => {
       try {
-        const res = await axiosInstance.post("promoter/become-premium/");
-        const { razorpay_order_id, amount, currency } = res.data;
+        const res = await axiosInstance.post("promoter/become-premium/", {
+          plan_type: selectedPlan
+        });
+        const { razorpay_order_id, amount, currency, plan_type } = res.data;
 
         const loaded = await loadRazorpayScript();
         if (!loaded) {
           toast.error("Razorpay SDK failed to load.");
-          navigate(-1);
+          navigate("/promoter/dashboard");
           return;
         }
 
@@ -39,7 +41,7 @@ const BuyPremium = () => {
             amount: amount * 100,
             currency,
             name: "Beston Premium Membership",
-            description: "Upgrade to Premium Promoter",
+            description: `Upgrade to Premium Promoter - ${plan_type === "annual" ? "Annual" : "Monthly"} Plan`,
             order_id: razorpay_order_id,
             handler: async (response) => {
               try {
@@ -49,6 +51,7 @@ const BuyPremium = () => {
                     razorpay_payment_id: response.razorpay_payment_id,
                     razorpay_order_id: response.razorpay_order_id,
                     razorpay_signature: response.razorpay_signature,
+                    plan_type: plan_type,
                   }
                 );
 
@@ -64,14 +67,14 @@ const BuyPremium = () => {
                 toast.error(
                   "Payment verification failed. Please contact support."
                 );
-                navigate(-1);
+                navigate("/promoter/dashboard");
               }
             },
             modal: {
               escape: true,
               ondismiss: () => {
                 toast.warning("Payment cancelled");
-                navigate(-1);
+                navigate("/promoter/dashboard");
               },
             },
             theme: { color: "#0D6EFD" },
@@ -84,12 +87,12 @@ const BuyPremium = () => {
       } catch (error) {
         console.error(error);
         toast.error(error.response?.data?.detail || "Failed to create order.");
-        navigate(-1);
+        navigate("/promoter/dashboard");
       }
     };
 
     becomePremium();
-  }, [navigate]);
+  }, [navigate, selectedPlan]);
 
   return (
     <>

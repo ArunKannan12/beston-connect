@@ -12,7 +12,7 @@ const Navbar = () => {
   const debounceTimeout = useRef(null);
   const navigate = useNavigate();
   const location = useLocation();
-  const { isAuthenticated, logout,user } = useAuth();
+  const { isAuthenticated, logout, user } = useAuth();
   const [accountOpen, setAccountOpen] = useState(false);
   const totalItems = useCartCount();
 
@@ -49,17 +49,17 @@ const Navbar = () => {
     }
   };
 
-  const handleRoleSwitch = async (targetRole,redirectTo) =>{
+  const handleRoleSwitch = async (targetRole, redirectTo) => {
     try {
-      if(user.active_role !== targetRole){
-        await axiosInstance.post('auth/switch-role/',{role:targetRole});
-        user.active_role=targetRole
+      if (user.active_role !== targetRole) {
+        await axiosInstance.post('auth/switch-role/', { role: targetRole });
+        user.active_role = targetRole
       }
       setAccountOpen(false)
       navigate(redirectTo)
     } catch (error) {
-     console.error(error);
-      
+      console.error(error);
+
     }
   }
 
@@ -67,7 +67,7 @@ const Navbar = () => {
   return (
     <nav className="bg-white border-gray-200 ">
       <div className="max-w-screen-xl flex flex-wrap items-center justify-between mx-auto p-4">
-        
+
         {/* Logo */}
         <Link to="/" className="flex items-center space-x-3 rtl:space-x-reverse">
           <img src={Beston} className="h-10" alt="Beston Logo" />
@@ -130,31 +130,45 @@ const Navbar = () => {
                 <Link to="/orders" className="block px-4 py-2 hover:bg-gray-100" onClick={() => setAccountOpen(false)}>My Orders</Link>
                 <Link to="/returns" className="block px-4 py-2 hover:bg-gray-100" onClick={() => setAccountOpen(false)}>My Returns</Link>
                 <Link to="/replacements" className="block px-4 py-2 hover:bg-gray-100" onClick={() => setAccountOpen(false)}>My Replacements</Link>
-                
-                  {isAuthenticated && user && (
-                    <>
-                      {/* Not a promoter yet */}
-                      {!user.roles?.includes('promoter') && (
-                        <Link
-                          to="/become-a-promoter"
-                          className="block px-4 py-2 hover:bg-gray-100"
-                          onClick={() => setAccountOpen(false)}
-                        >
-                          Become a Promoter
-                        </Link>
-                      )}
 
-                      {/* Already a promoter */}
-                      {user.roles?.includes('promoter') && user.active_role !== 'promoter' && (
-                        <button
-                          onClick={() => handleRoleSwitch('promoter', '/promoter/dashboard')}
-                          className="block w-full text-left px-4 py-2 hover:bg-gray-100"
-                        >
-                          Switch to Promoter
-                        </button>
-                      )}
-                    </>
-                  )}
+                {isAuthenticated && user && (
+                  <>
+                    {/* No Promoter Profile */}
+                    {!user.promoter_profile && (
+                      <Link
+                        to="/become-a-promoter"
+                        className="block px-4 py-2 hover:bg-gray-100"
+                        onClick={() => setAccountOpen(false)}
+                      >
+                        🚀 Join Promoter Program
+                      </Link>
+                    )}
+
+                    {/* Pending Application */}
+                    {user.promoter_profile && !user.promoter_profile.is_approved && (
+                      <div className="px-4 py-2 text-yellow-600 font-medium">
+                        ⏳ Application Pending
+                      </div>
+                    )}
+
+                    {/* Approved but Not Active */}
+                    {user.promoter_profile?.is_approved && user.active_role !== "promoter" && (
+                      <button
+                        onClick={() => handleRoleSwitch("promoter", "/promoter/dashboard")}
+                        className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-emerald-600 font-medium"
+                      >
+                        🔄 Switch to Promoter
+                      </button>
+                    )}
+
+                    {/* Active Promoter */}
+                    {user.active_role === "promoter" && (
+                      <div className="px-4 py-2 text-emerald-600 font-medium">
+                        ✅ Active Promoter
+                      </div>
+                    )}
+                  </>
+                )}
 
                 <button
                   onClick={() => {
