@@ -11,11 +11,12 @@ from django.contrib.auth.password_validation import validate_password
 from accounts.email import CustomPasswordResetEmail
 from investor.serializers import InvestorSerializer
 from promoter.models import Promoter
-from promoter.serializers import PromoterSerializer
+from promoter.serializers import PromoterSerializer,MinimalPromoterSerializer
 from django.core.validators import RegexValidator
 from investor.models import Investor
 from accounts.email import CustomActivationEmail
 from djoser.utils import encode_uid
+from manager.models import Manager
 from djoser.serializers import UserCreateSerializer as BaseUserCreateSerializer
 logger = logging.getLogger('accounts')
 
@@ -40,6 +41,7 @@ class BaseUserSerializer(serializers.ModelSerializer):
     current_role = serializers.SerializerMethodField()  # override to show active_role
     role=serializers.SerializerMethodField()
     auth_provider = serializers.CharField(read_only=True)
+    
     class Meta:
         model = User
         fields = [
@@ -178,32 +180,47 @@ class PromoterProfileSerializer(BaseUserSerializer):
 
     def get_promoter_profile(self, obj):
         promoter = getattr(obj, 'promoter', None)
-        return PromoterSerializer(promoter).data if promoter else None
+        return MinimalPromoterSerializer(promoter).data if promoter else None
+
+class ManagerProfileSerializer(BaseUserSerializer):
+    manager_profile = serializers.SerializerMethodField()
+
+    class Meta(BaseUserSerializer.Meta):
+        fields = BaseUserSerializer.Meta.fields + ['manager_profile']
+
+    def get_manager_profile(self, obj):
+        manager = getattr(obj, 'manager', None)
+        if not manager:
+            return None
+        return {
+            "manager_type": manager.manager_type,
+            "phone_number": manager.phone_number,
+            "address": manager.address,
+            "district": manager.district,
+            "city": manager.city,
+            "state": manager.state,
+            "pincode": manager.pincode
+        }
 
 class RoleBasedUserDisplaySerializer(serializers.Serializer):
     def to_representation(self, instance):
-        active_role = getattr(instance,'active_role','customer')
-        if active_role == 'promoter' and hasattr(instance,'promoter'):
-            promoter_serilaizer=PromoterSerializer(instance.promoter,context=self.context)
-            data=promoter_serilaizer.data
-            data.update({
-                "id": instance.id,
-                "email": instance.email,
-                "first_name": instance.first_name,
-                "last_name": instance.last_name,
-                "active_role": instance.active_role,
-                "auth_provider": instance.auth_provider,
-                "roles": list(instance.user_roles.values_list("role__name", flat=True))
-            })
-            return data
-       
-        if active_role == 'customer':
-            serializer = CustomerProfileSerializer(instance, context=self.context)
-        elif active_role == 'investor'and hasattr(instance, 'investor'):
-            serializer = InvestorProfileSerializer(instance, context=self.context)
-        elif active_role ==  'admin':
-                serializer = BaseUserSerializer(instance, context=self.context)
-        return serializer.data
+        # Start with base user fields
+        base_data = BaseUserSerializer(instance, context=self.context).data
+
+        # Always include promoter profile if exists
+        if hasattr(instance, 'promoter'):
+            base_data["promoter_profile"] = MinimalPromoterSerializer(instance.promoter, context=self.context).data
+
+        # Always include investor profile if exists
+        if hasattr(instance, 'investor'):
+            base_data["investor_profile"] = InvestorSerializer(instance.investor, context=self.context).data
+
+        # Always include manager profile if exists
+        if hasattr(instance, 'manager'):
+            base_data["manager_profile"] = ManagerProfileSerializer(instance, context=self.context).data
+
+        return base_data
+
 
 
 class ResendActivationEmailSerializer(serializers.Serializer):

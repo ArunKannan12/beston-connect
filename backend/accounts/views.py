@@ -653,6 +653,7 @@ def custom_jwt_view(request):
         "access_token": access_token,
         "refresh_token": refresh_token,
     })
+    
 class ProfileView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
@@ -680,11 +681,25 @@ class ProfileView(APIView):
             user.active_role = user.role
             user.save(update_fields=['active_role'])
 
-        serializer = self.get_serializer(user, context={"request": request})
-        data = serializer.data
+        # Start with base user data
+        from .serializers import BaseUserSerializer, MinimalPromoterSerializer, InvestorSerializer, ManagerProfileSerializer
+        data = BaseUserSerializer(user, context={"request": request}).data
 
-        # Include all roles
+        # Always include promoter profile if exists
+        if hasattr(user, "promoter"):
+            data["promoter_profile"] = MinimalPromoterSerializer(user.promoter, context={"request": request}).data
+
+        # Always include investor profile if exists
+        if hasattr(user, "investor"):
+            data["investor_profile"] = InvestorSerializer(user.investor, context={"request": request}).data
+
+        # Always include manager profile if exists
+        if hasattr(user, "manager"):
+            data["manager_profile"] = ManagerProfileSerializer(user, context={"request": request}).data
+
+        # Always include roles list
         data["roles"] = list(user.user_roles.values_list("role__name", flat=True))
+
         return Response(data, status=status.HTTP_200_OK)
 
     def put(self, request):

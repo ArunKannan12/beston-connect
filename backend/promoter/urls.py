@@ -16,6 +16,7 @@ from .views import (
     PremiumAmountAPIView,
     PromoterMeAPIView,
     UnpaidPromoterDashboardAPIView,
+    
     AvailableProductsForPromotionAPIView,
     PaidPromoterDashboardAPIView,
     PromoterWalletSummaryAPIView,
@@ -24,26 +25,34 @@ from .views import (
     PromotedProductListAPIView,
     PincodeServiceabilityView,
     RegisterPromoterClickAPIView,
-    PremiumSettingsCreateAPIView,
-    PremiumSettingsRetrieveUpdateDestroyAPIView,
+    PremiumSettingsAPIView,
     CommissionLevelListCreateAPIView,
     CommissionLevelDetailAPIView,
     PromoterListAPIView,
     WithdrawalRequestAdminListAPIView,
     CancelWithdrawalRequestAPIView,
     WithdrawalRequestRetrieveAPIView,
-    WithdrawalRequestAdminRetrieveAPIView
-
+    WithdrawalRequestAdminRetrieveAPIView,
+    ApprovePromoterAPIView,
+    ManageSubscriptionAPIView,
+    VerifySubscriptionPaymentAPIView,
+    PromoterBankAccountListCreateAPIView,
+    PromoterBankAccountRetrieveUpdateDestroyAPIView
 )
 
 urlpatterns = [
     # 📄 Promoter Management
     path('promoters/', BecomePromoterAPIView.as_view(), name='promoter-list-create'),
+    path('admin/promoters/approve/<int:promoter_id>/', ApprovePromoterAPIView.as_view(), name='approve-promoter'),
     path('admin/promoters-list/', PromoterListAPIView.as_view(), name='promoter-list'),
     path('promoters/<int:id>/', PromoterRetrieveUpdateDestroyAPIView.as_view(), name='promoter-detail'),
 
     # 💰 Promoter Commissions
     path('promoter/commissions/', PromoterCommissionListCreateAPIView.as_view(), name='promoter-commission-list-create'),
+    
+    # 🏦 Promoter Bank Account
+    path('promoter/bank-account/', PromoterBankAccountListCreateAPIView.as_view(), name='promoter-bank-account-list-create'),
+    path('promoter/bank-account/detail/', PromoterBankAccountRetrieveUpdateDestroyAPIView.as_view(), name='promoter-bank-account-detail'),
 
     # 🏦 Withdrawal Requests
     path('promoter/withdrawals/', WithdrawalRequestListCreateAPIView.as_view(), name='promoter-withdrawal-list-create'),
@@ -65,9 +74,7 @@ urlpatterns = [
     path('promote/multiple-products/', PromoterProductsAPIView.as_view(), name='promoter-products'),
 
     path('promoter/premium-amount/', PremiumAmountAPIView.as_view(), name='promoter-premium-amount'),
-    path("admin/promoter/create-premium-amt/", PremiumSettingsCreateAPIView.as_view(), name="premium-list-create"),
-    path("admin/promoter/edit-premium-amt/<int:pk>/", PremiumSettingsRetrieveUpdateDestroyAPIView.as_view(), name="premium-detail"),
-    path("promoters/me/", PromoterMeAPIView.as_view(), name="promoter-me"),
+    path("premium-settings/", PremiumSettingsAPIView.as_view(), name="premium-settings"), path("promoters/me/", PromoterMeAPIView.as_view(), name="promoter-me"),
 
     path('commission-levels/', CommissionLevelListCreateAPIView.as_view(), name='commission-level-list-create'),
     path('commission-levels/<int:pk>/', CommissionLevelDetailAPIView.as_view(), name='commission-level-detail'),
@@ -85,4 +92,6 @@ urlpatterns = [
     path("promoted-products/", PromotedProductListAPIView.as_view(), name="promoted-products"),
     path("promoter/register-click/",RegisterPromoterClickAPIView.as_view(),name="promoter-register-click"),
     path("check-pincode/<str:pin>/", PincodeServiceabilityView.as_view(), name="check_pincode"),
+    path('promoter/manage-subscription/', ManageSubscriptionAPIView.as_view(), name='manage-subscription'),
+    path('promoter/verify-subscription-payment/', VerifySubscriptionPaymentAPIView.as_view(), name='verify-subscription-payment'),
 ]

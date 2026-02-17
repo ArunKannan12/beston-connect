@@ -43,11 +43,12 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'accounts',
     'admin_dashboard',
-    'products',
+    'products.apps.ProductsConfig',
     'cart',
     'orders',
     'promoter',
     'investor',
+    'manager',
     'djoser',
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
@@ -56,6 +57,7 @@ INSTALLED_APPS = [
     'cloudinary',
     'cloudinary_storage',
     'django_extensions',
+    
     
 ]
 

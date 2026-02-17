@@ -6,7 +6,7 @@ from rest_framework import status
 from django.db import transaction
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import generics, filters
-from accounts.permissions import IsAdmin
+from accounts.permissions import IsAdmin,IsCustomer,IsPromoter
 from .serializers import (
                         AdminDashboardStatsSerializer, 
                         ProductAdminSerializer,
@@ -14,7 +14,8 @@ from .serializers import (
                         CustomerSerializer,
                         AdminOrderSerializer,
                         AdminLogSerializer,
-                        OrderPackingSerializer
+                        OrderPackingSerializer,
+                        ContactMessageSerializer
                         )
 from orders.signals import send_multichannel_notification
 from django.db.models import Q,Count,F,Prefetch
@@ -32,7 +33,7 @@ from django.utils.dateparse import parse_date
 from orders.models import Order,ReturnRequest,ReplacementRequest,OrderStatus,OrderItemStatus,OrderItem
 from .helpers import str_to_bool
 from .pagination import FlexiblePageSizePagination
-from .models import AdminLog
+from .models import AdminLog,ContactMessage
 User=get_user_model()
 
 class AdminDashboardStatsAPIView(APIView):
@@ -948,33 +949,45 @@ class OrdersPackingListAPIView(APIView):
             'packed_orders': OrderPackingSerializer(packed_orders, many=True).data,
         })
 
+
 class DelhiveryWebhookAPIView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
 
-    # ------------------------------------------------------------------
-    # OFFICIAL DELHIVERY → INTERNAL STATUS MAPPING
-    # ------------------------------------------------------------------
-    STATUS_MAP = {
-        # ---------------- FORWARD ----------------
-        ("UD", "manifested"): OrderStatus.PROCESSING,
-        ("UD", "not picked"): OrderStatus.PROCESSING,
-        ("UD", "in transit"): OrderStatus.IN_TRANSIT,
-        ("UD", "pending"): OrderStatus.IN_TRANSIT,
-        ("UD", "dispatched"): OrderStatus.OUT_FOR_DELIVERY,
-        ("DL", "delivered"): OrderStatus.DELIVERED,
-        ("UD", "undelivered"): OrderStatus.UNDELIVERED,
-        ("CN", "cancelled"): OrderStatus.CANCELLED,
-
-        # ---------------- RETURN / RTO ----------------
-        ("RT", "in transit"): OrderStatus.RETURN_INITIATED,
-        ("RT", "pending"): OrderStatus.RETURN_INITIATED,
-        ("RT", "dispatched"): OrderStatus.RETURN_INITIATED,
-        ("DL", "rto"): OrderStatus.DELIVERED_TO_WAREHOUSE,
+    # -------------------- FORWARD ORDER STATUS MAP --------------------
+    FORWARD_STATUS_MAP = {
+        ("UD", "manifested"): "processing",
+        ("UD", "not picked"): "processing",
+        ("UD", "in transit"): "in_transit",
+        ("UD", "pending"): "in_transit",
+        ("UD", "dispatched"): "out_for_delivery",
+        ("DL", "delivered"): "delivered",
+        ("UD", "undelivered"): "undelivered",
+        ("CN", "cancelled"): "cancelled",
     }
 
-    # ------------------------------------------------------------------
+    # -------------------- RETURN STATUS MAP --------------------
+    RETURN_STATUS_MAP = {
+        ("RT", "in transit"): "pu_in_transit",
+        ("RT", "pending"): "pu_pending",
+        ("RT", "dispatched"): "pu_dispatched",
+        ("DL", "rto"): "dto",
+    }
 
+    # -------------------- REPLACEMENT / REVERSE STATUS MAP --------------------
+    REPLACEMENT_STATUS_MAP = {
+        ("PP", "open"): "pp_open",
+        ("PP", "scheduled"): "pp_scheduled",
+        ("PP", "dispatched"): "pp_dispatched",
+        ("PU", "in transit"): "pu_in_transit",
+        ("PU", "pending"): "pu_pending",
+        ("PU", "dispatched"): "pu_dispatched",
+        ("DL", "dto"): "dto",
+        ("CN", "canceled"): "canceled",
+        ("CN", "closed"): "closed",
+    }
+
+    # -------------------- POST --------------------
     def post(self, request):
         try:
             data = request.data
@@ -985,7 +998,6 @@ class DelhiveryWebhookAPIView(APIView):
                 return Response({"error": "No shipment data found"}, status=400)
 
             processed = []
-
             for shipment in shipments:
                 result = self._process_shipment(shipment)
                 if result:
@@ -998,10 +1010,7 @@ class DelhiveryWebhookAPIView(APIView):
             logger.exception("❌ Delhivery webhook error")
             return Response({"error": str(e)}, status=500)
 
-    # ------------------------------------------------------------------
-    # HELPERS
-    # ------------------------------------------------------------------
-
+    # -------------------- HELPERS --------------------
     def _extract_shipments(self, data):
         if data.get("Shipments"):
             return data["Shipments"]
@@ -1021,95 +1030,158 @@ class DelhiveryWebhookAPIView(APIView):
             logger.warning("⚠️ Invalid shipment payload: %s", shipment)
             return None
 
-        internal_status = self.STATUS_MAP.get((status_type, status_text))
-        if not internal_status:
-            logger.warning(
-                "⚠️ Ignored unknown Delhivery status: %s | %s | %s",
-                waybill, status_type, status_text
-            )
-            return None
+        # -------------------- REPLACEMENT ----------------
+        repl_status = self.REPLACEMENT_STATUS_MAP.get((status_type, status_text))
+        replacement = ReplacementRequest.objects.filter(new_order__waybill=waybill).first()
+        if replacement and repl_status:
+            return self._update_replacement(replacement, status_type, status_text, repl_status, updated_at)
 
-        # ---------------- FORWARD ORDER ----------------
-        order = Order.objects.filter(waybill=waybill).first()
-        if order:
-            return self._update_order(order, internal_status, updated_at)
-
-        # ---------------- RETURN / RVP ----------------
+        # -------------------- RETURN ----------------
+        return_status = self.RETURN_STATUS_MAP.get((status_type, status_text))
         return_request = ReturnRequest.objects.filter(waybill=waybill).first()
-        if return_request:
-            return self._update_return(return_request, internal_status, updated_at)
+        if return_request and return_status:
+            return self._update_return(return_request, status_type, status_text, return_status, updated_at)
 
-        logger.warning("🚫 No order or return found for AWB: %s", waybill)
+        # -------------------- FORWARD ORDER ----------------
+        forward_status = self.FORWARD_STATUS_MAP.get((status_type, status_text))
+        order = Order.objects.filter(waybill=waybill).first()
+        if order and forward_status:
+            return self._update_order(order, status_type, status_text, forward_status, updated_at)
+
+        # -------------------- NOTHING MATCHED ----------------
+        logger.warning("🚫 No matching record for AWB=%s, StatusType=%s, StatusText=%s",
+                       waybill, status_type, status_text)
         return None
 
-    # ------------------------------------------------------------------
-
-    def _update_order(self, order, new_status, updated_at):
-        with transaction.atomic():
-            if order.status != new_status:
-                old_status = order.status
-                order.status = new_status
-
-                if new_status == OrderStatus.DELIVERED:
-                    order.delivered_at = timezone.now()
-
-                order.save(update_fields=["status", "delivered_at"])
-
-                # 🔑 Sync order items (except refunded)
-                order.items.exclude(
-                    status=OrderItemStatus.REFUNDED
-                ).update(status=new_status)
-
-                logger.info(
-                    "✅ Order %s: %s → %s",
-                    order.order_number, old_status, new_status
-                )
-
-                send_multichannel_notification(
-                    user=order.user,
-                    order=order,
-                    event=f"order_{new_status}",
-                    message=f"Your order {order.order_number} is now {new_status.replace('_', ' ')}.",
-                    channels=["email"],
-                    template_name="emails/notification.html",
-                    payload={
-                        "waybill": order.waybill,
-                        "courier": "Delhivery",
-                        "status_updated_at": str(updated_at),
-                    },
-                )
-
-        return {
-            "type": "order",
-            "order_number": order.order_number,
-            "status": new_status,
-            "waybill": order.waybill,
-        }
-
-    # ------------------------------------------------------------------
-
-    def _update_return(self, rr, new_status, updated_at):
+    # -------------------- UPDATE RETURN --------------------
+    def _update_return(self, rr, status_type, status_text, new_status, updated_at):
         with transaction.atomic():
             old_status = rr.status
             rr.status = new_status
+            rr.delhivery_status_type = status_type
+            rr.delhivery_status = status_text
+            rr.delhivery_status_updated_at = updated_at
 
-            if new_status == OrderStatus.DELIVERED_TO_WAREHOUSE:
+            if new_status == "dto":
                 rr.delivered_back_date = timezone.now()
 
-            rr.save()
+            rr.save(update_fields=[
+                "status", "delhivery_status_type", "delhivery_status",
+                "delhivery_status_updated_at", "delivered_back_date"
+            ])
+            logger.info("♻️ ReturnRequest %s: %s → %s", rr.id, old_status, new_status)
 
-            logger.info(
-                "♻️ ReturnRequest %s: %s → %s",
-                rr.id, old_status, new_status
-            )
+        return {"type": "return", "return_id": rr.id, "status": new_status, "waybill": rr.waybill}
 
-        return {
-            "type": "return",
-            "return_id": rr.id,
-            "status": new_status,
-            "waybill": rr.waybill,
-        }
+    # -------------------- UPDATE REPLACEMENT --------------------
+    def _update_replacement(self, rr, status_type, status_text, new_status, updated_at):
+        with transaction.atomic():
+            old_status = rr.status
+            rr.status = new_status
+            rr.delhivery_status_type = status_type
+            rr.delhivery_status = status_text
+            rr.delhivery_status_updated_at = updated_at
 
+            if new_status == "dto":
+                rr.delivered_at = timezone.now()
+            if new_status in ["pp_dispatched", "pu_in_transit"]:
+                rr.shipped_at = timezone.now()
+
+            rr.save(update_fields=[
+                "status", "delhivery_status_type", "delhivery_status",
+                "delhivery_status_updated_at", "shipped_at", "delivered_at"
+            ])
+            logger.info("🔄 ReplacementRequest %s: %s → %s", rr.id, old_status, new_status)
+
+        return {"type": "replacement", "replacement_id": rr.id, "status": new_status, "waybill": rr.new_order.waybill}
+
+    # -------------------- UPDATE FORWARD ORDER --------------------
+    def _update_order(self, order, status_type, status_text, new_status, updated_at):
+        with transaction.atomic():
+            old_status = order.status
+            order.status = new_status
+            order.delhivery_status_type = status_type
+            order.delhivery_status = status_text
+            order.delhivery_status_updated_at = updated_at
+
+            if new_status == "delivered":
+                order.delivered_at = timezone.now()
+            if new_status == "out_for_delivery":
+                order.shipped_at = timezone.now()
+
+            order.save(update_fields=[
+                "status", "delhivery_status_type", "delhivery_status",
+                "delhivery_status_updated_at", "shipped_at", "delivered_at"
+            ])
+            logger.info("📦 Order %s: %s → %s", order.id, old_status, new_status)
+
+        return {"type": "order", "order_id": order.id, "status": new_status, "waybill": order.waybill}
+
+class ContactMessageAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsCustomer | IsPromoter]
+
+    def post(self, request):
+        serializer = ContactMessageSerializer(
+            data=request.data,
+            context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save(user=request.user)
+        return Response(
+            {"detail": "Message sent successfully!"},
+            status=status.HTTP_201_CREATED
+        )
+    
+
+class ContactMessageListAPIView(generics.ListAPIView):
+    """
+    Admin: list all contact messages (optionally filter unresolved).
+    """
+    serializer_class = ContactMessageSerializer
+    permission_classes = [IsAdmin]
+
+    def get_queryset(self):
+        queryset = ContactMessage.objects.all().order_by("-created_at")
+        unresolved = self.request.query_params.get("unresolved")
+        if unresolved == "true":
+            queryset = queryset.filter(is_resolved=False)
+        return queryset
+
+
+class ContactMessageDetailAPIView(generics.RetrieveAPIView):
+    """
+    Admin: view a single contact message.
+    """
+    serializer_class = ContactMessageSerializer
+    permission_classes = [IsAdmin]
+    queryset = ContactMessage.objects.all()
+
+
+class ResolveContactMessageAPIView(generics.UpdateAPIView):
+    """
+    Admin: mark a contact message as resolved/responded.
+    """
+    serializer_class = ContactMessageSerializer
+    permission_classes = [IsAdmin]
+    queryset = ContactMessage.objects.all()
+
+    def update(self, request, *args, **kwargs):
+        message = self.get_object()
+        message.is_resolved = True
+        message.responded_at = timezone.now()
+        message.save()
+        return Response({"detail": "Message marked as resolved"}, status=status.HTTP_200_OK)
+
+
+class DeleteContactMessageAPIView(generics.DestroyAPIView):
+    """
+    Admin: delete a contact message.
+    """
+    serializer_class = ContactMessageSerializer
+    permission_classes = [IsAdmin]
+    queryset = ContactMessage.objects.all()
+
+    
 # class RazorpayWebhookAPIView(APIView):
 #     authentication_classes = []
 #     permission_classes = []

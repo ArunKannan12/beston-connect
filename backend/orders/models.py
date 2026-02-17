@@ -1,6 +1,6 @@
 from rest_framework.exceptions import ValidationError
 from django.utils import timezone
-from django.db import models
+from django.db import models,transaction
 from django.contrib.auth import get_user_model
 from products.models import ProductVariant
 from decimal import Decimal
@@ -50,6 +50,10 @@ class OrderStatus(models.TextChoices):
     CANCELLED = 'cancelled', 'Cancelled'
     UNDELIVERED = 'undelivered', 'Undelivered'
 
+    # ---------- Replacement / REPL ----------
+    REPL_SCHEDULED = 'repl_scheduled', 'Replacement Scheduled'
+    REPL_IN_TRANSIT = 'repl_in_transit', 'Replacement In Transit'
+    REPL_COMPLETED = 'repl_completed', 'Replacement Completed'
 
 
 # ---------------- Payment Method ----------------
@@ -84,8 +88,6 @@ class Order(models.Model):
     delivery_charge = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
     total_commission = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
     total = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
-    promoter = models.ForeignKey("promoter.Promoter", on_delete=models.SET_NULL, null=True, blank=True)
-    is_commission_applied=models.BooleanField(default=False)
     # --- Cancellation ---
     cancel_reason = models.TextField(null=True, blank=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
@@ -156,8 +158,6 @@ class Order(models.Model):
             return f"https://www.delhivery.com/tracking?waybill={self.waybill}"
         return None
 
-
-# ---------------- Order Item ----------------
 class OrderItemStatus(models.TextChoices):
     PENDING = 'pending', 'Pending'
     PROCESSING = 'processing', 'Processing'
@@ -169,6 +169,11 @@ class OrderItemStatus(models.TextChoices):
     CANCELLED = 'cancelled', 'Cancelled'
     UNDELIVERED = 'undelivered', 'Undelivered'
     REFUNDED = 'refunded', 'Refunded'
+
+    # ---------- Replacement / REPL ----------
+    REPL_SCHEDULED = 'repl_scheduled', 'Replacement Scheduled'
+    REPL_IN_TRANSIT = 'repl_in_transit', 'Replacement In Transit'
+    REPL_COMPLETED = 'repl_completed', 'Replacement Completed'
 
 
 
@@ -184,6 +189,7 @@ class OrderItem(models.Model):
     promoter_commission_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     promoter_commission_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     referral_code = models.CharField(max_length=50, null=True, blank=True)
+    is_commission_applied=models.BooleanField(default=False)
 
     # --- Cancellation & Refunds ---
     cancel_reason = models.TextField(blank=True, null=True)
@@ -221,129 +227,221 @@ class Refund(models.Model):
         return f"{self.refund_id or 'Pending'} - ₹{self.amount}"
 
 
+
+RETURN_STATUS_MAP = {
+    ("RT", "in transit"): "pu_in_transit",
+    ("RT", "pending"): "pu_pending",
+    ("RT", "dispatched"): "pu_dispatched",
+    ("DL", "rto"): "dto",
+}
+
 class ReturnRequest(models.Model):
+
     STATUS_CHOICES = [
-        ('pending', 'Pending'),
-        ('pickup_scheduled', 'Pickup Scheduled'),
-        ('in_transit', 'In Transit'),
-        ('delivered_to_warehouse', 'Delivered to Warehouse'),
-        ('refunded', 'Refunded'),
-        ('cancelled', 'Cancelled'),
-        ('rejected', 'Rejected'),
+        # Reverse pickup
+        ("pending", "Pending Approval"),
+        ("pp_open", "Pickup Open"),
+        ("pp_scheduled", "Pickup Scheduled"),
+        ("pp_dispatched", "Pickup Dispatched"),
+        ("pu_in_transit", "Pickup In Transit"),
+        ("pu_pending", "Pickup Pending"),
+        ("pu_dispatched", "Pickup Dispatched"),
+        ("dto", "Delivered to Origin"),
+
+        # Terminal
+        ("refunded", "Refunded"),
+        ("canceled", "Canceled"),
+        ("closed", "Closed"),
+        ("rejected", "Rejected"),        # ✅ Add
+        ("pickup_failed", "Pickup Failed"),  # ✅ Add
     ]
 
-    # Links
-    order = models.ForeignKey("orders.Order", on_delete=models.CASCADE, related_name='return_requests')
-    order_item = models.ForeignKey("orders.OrderItem", on_delete=models.CASCADE, null=True, blank=True, related_name='return_requests')
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='return_requests')
+    order = models.ForeignKey(
+        "orders.Order",
+        on_delete=models.CASCADE,
+        related_name="return_requests"
+    )
+    order_item = models.ForeignKey(
+        "orders.OrderItem",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="return_requests"
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="return_requests"
+    )
 
-    # Return details
     reason = models.TextField()
-    status = models.CharField(max_length=50, choices=STATUS_CHOICES, default='pending')
+    status = models.CharField(
+        max_length=50,
+        choices=STATUS_CHOICES,
+        default="pp_open"
 
-    # Refund info
-    refund_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    )
+
+    refund_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True
+    )
     refunded_at = models.DateTimeField(null=True, blank=True)
-    reverse_pickup_charge = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+
+    reverse_pickup_charge = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True
+    )
     recovery_fixed = models.BooleanField(default=False)
 
-    # Delhivery tracking
-    waybill = models.CharField(max_length=50, blank=True, null=True)
+    waybill = models.CharField(max_length=50, null=True, blank=True)
     pickup_date = models.DateTimeField(null=True, blank=True)
     delivered_back_date = models.DateTimeField(null=True, blank=True)
-
-    # Admin notes
+    delhivery_status_type = models.CharField(
+        max_length=5,
+        null=True,
+        blank=True,
+        help_text="Delhivery Status Type (RT, DL, etc.)"
+    )
+    delhivery_status = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Raw Delhivery status or error message"
+    )
+    delhivery_status_updated_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when Delhivery sent this status"
+    )
     admin_comment = models.TextField(blank=True, null=True)
     admin_processed_at = models.DateTimeField(null=True, blank=True)
 
-    # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=['order_item'],
-                condition=~models.Q(status='refunded'),
-                name='unique_active_return_per_item'
+                fields=["order_item"],
+                condition=models.Q(order_item__isnull=False)
+                & ~models.Q(status="refunded"),
+                name="unique_active_return_per_item",
             )
         ]
-        ordering = ['-created_at']
+        ordering = ["-created_at"]
 
     def clean(self):
         if self.order_item:
             exists = ReturnRequest.objects.filter(
                 order_item=self.order_item
-            ).exclude(pk=self.pk).exclude(status='refunded').exists()
+            ).exclude(pk=self.pk).exclude(status="refunded").exists()
             if exists:
-                raise ValidationError("A return is already in progress for this item.")
+                raise ValidationError(
+                    "A return is already in progress for this item."
+                )
 
-        if self.refund_amount and self.order_item and self.refund_amount > self.order_item.total_price():
-            raise ValidationError({"refund_amount": "Cannot exceed item total."})
+        if (
+            self.refund_amount
+            and self.order_item
+            and self.refund_amount > self.order_item.total_price()
+        ):
+            raise ValidationError(
+                {"refund_amount": "Cannot exceed item total."}
+            )
 
         super().clean()
 
+    @transaction.atomic
     def mark_refunded(self, amount=None, reverse_charge=None):
-        from .models import ReturnRecoveryAccount, ReturnRecoveryTransaction
-
+        if self.status != "dto":   # ✅ SAFETY CHECK
+            raise ValidationError("Item not yet received at warehouse")
         if amount is not None:
             self.refund_amount = amount
 
-        # If reverse_charge not provided → use existing saved charge → fallback
-        if reverse_charge is None:
-            reverse_charge = (
-                self.reverse_pickup_charge or
-                self.refund_amount or
-                Decimal("0.00")
-            )
+        reverse_charge = reverse_charge or self.reverse_pickup_charge or Decimal("0.00")
 
-        # Save charge in model
         self.reverse_pickup_charge = reverse_charge
-        self.recovery_fixed = True  # ⭐ IMPORTANT: prevent future double recovery
-
-        self.status = 'refunded'
+        self.recovery_fixed = True
+        self.status = "refunded"
         self.refunded_at = timezone.now()
+
         self.admin_comment = (
             f"Refunded ₹{self.refund_amount}. "
             f"Pending recovery ₹{reverse_charge} saved."
         )
+
         self.save(update_fields=[
-            'status',
-            'refunded_at',
-            'refund_amount',
-            'reverse_pickup_charge',
-            'recovery_fixed',
-            'admin_comment'
+            "status",
+            "refunded_at",
+            "refund_amount",
+            "reverse_pickup_charge",
+            "recovery_fixed",
+            "admin_comment",
         ])
 
-        # ⭐ DO NOT ADD DUPLICATE RECOVERY ENTRY
         account, _ = ReturnRecoveryAccount.objects.get_or_create(user=self.user)
 
-        already_added = ReturnRecoveryTransaction.objects.filter(
+        if reverse_charge > 0 and not ReturnRecoveryTransaction.objects.filter(
             account=account,
             source=f"ReturnRequest #{self.id}",
-            transaction_type="debit"
-        ).exists()
-
-        if not already_added and reverse_charge > 0:
-            account.add_recovery(reverse_charge, source=f"ReturnRequest #{self.id}")
-
+            transaction_type="debit",
+        ).exists():
+            account.add_recovery(
+                reverse_charge,
+                source=f"ReturnRequest #{self.id}",
+                source_type="return",
+            )
 
     @classmethod
     def should_block_user(cls, user, threshold=3, window_days=90):
-        recent_returns = cls.objects.filter(
+        return cls.objects.filter(
             user=user,
-            created_at__gte=timezone.now() - timedelta(days=window_days)
-        ).count()
-        return recent_returns > threshold
-
-    @classmethod
-    def is_user_blocked(cls, user):
-        # Optional: integrate with a separate user-block table instead of ReturnRequest
-        return cls.objects.filter(user=user, status='refunded', created_at__gte=timezone.now() - timedelta(days=30)).count() > 3
+            status="refunded",
+            created_at__gte=timezone.now() - timedelta(days=window_days),
+        ).count() > threshold
 
     def __str__(self):
-        return f"Return for Item #{self.order_item.id} in Order #{self.order.order_number}" if self.order_item else f"Return for Order #{self.order.order_number}"
+        return (
+            f"Return for Item #{self.order_item.id} in Order #{self.order.order_number}"
+            if self.order_item
+            else f"Return for Order #{self.order.order_number}"
+        )
+    
+    def update_delhivery_status(self, status_type, status_text, updated_at=None):
+        """
+        Update raw Delhivery status and map to internal status.
+        """
+        status_type = status_type.strip().upper()
+        status_text = status_text.strip().lower()
+
+        self.delhivery_status_type = status_type
+        self.delhivery_status = status_text
+        self.delhivery_status_updated_at = updated_at or timezone.now()
+
+        internal_status = RETURN_STATUS_MAP.get((status_type, status_text))
+
+        if internal_status:
+            self.status = internal_status
+
+            if internal_status == "dto":
+                self.delivered_back_date = timezone.now()
+
+                # ✅ SYNC ORDER ITEM (NO ORDER-LEVEL CONFLICT)
+                if self.order_item:
+                    self.order_item.status = OrderItemStatus.DELIVERED_TO_WAREHOUSE
+                    self.order_item.save(update_fields=["status"])
+
+        self.save(update_fields=[
+            "status",
+            "delhivery_status_type",
+            "delhivery_status",
+            "delhivery_status_updated_at",
+            "delivered_back_date"
+        ])
 
 class ReturnRecoveryAccount(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="recovery_account")
@@ -356,23 +454,32 @@ class ReturnRecoveryAccount(models.Model):
         return f"{self.user.get_full_name()} - Pending ₹{self.balance_due}"
 
     # Add a new recovery (debit) when a return is refunded
-    def add_recovery(self, amount, source):
+    def add_recovery(self, amount, source, source_type="return", reference_id=None):
+        """
+        Add a debit to the recovery account for returns or replacements.
+        """
         amount = Decimal(amount)
         if amount <= 0:
             return
         self.total_recovery += amount
         self.balance_due += amount
         self.save(update_fields=["total_recovery", "balance_due", "last_updated"])
+
         ReturnRecoveryTransaction.objects.create(
             account=self,
             transaction_type="debit",
             amount=amount,
             source=source,
-            description=f"Return charge added from {source}"
+            source_type=source_type,
+            reference_id=reference_id,
+            description=f"{source_type.capitalize()} charge added from {source}"
         )
 
     # Apply recovery payment (credit) from checkout or manual adjustment
-    def apply_payment(self, amount, source="Checkout Adjustment"):
+    def apply_payment(self, amount, source="Checkout Adjustment", source_type="return", reference_id=None):
+        """
+        Apply a credit to settle pending recovery from returns or replacements.
+        """
         amount = Decimal(amount)
         applied = min(self.balance_due, amount)
         if applied <= 0:
@@ -380,93 +487,189 @@ class ReturnRecoveryAccount(models.Model):
         self.total_paid += applied
         self.balance_due -= applied
         self.save(update_fields=["total_paid", "balance_due", "last_updated"])
+
         ReturnRecoveryTransaction.objects.create(
             account=self,
             transaction_type="credit",
             amount=applied,
             source=source,
+            source_type=source_type,
+            reference_id=reference_id,
             description=f"Recovered ₹{applied} from {source}"
         )
         return applied
 
-
 class ReturnRecoveryTransaction(models.Model):
     TRANSACTION_CHOICES = [
-        ('debit', 'Debit (Recovery Added)'),
-        ('credit', 'Credit (Recovered)')
+        ("debit", "Debit (Recovery Added)"),
+        ("credit", "Credit (Recovered)")
     ]
 
-    account = models.ForeignKey(ReturnRecoveryAccount, on_delete=models.CASCADE, related_name='transactions')
+    SOURCE_TYPE_CHOICES = [
+        ("return", "Return"),
+        ("replacement", "Replacement")
+    ]
+
+    account = models.ForeignKey(ReturnRecoveryAccount, on_delete=models.CASCADE, related_name="transactions")
     transaction_type = models.CharField(max_length=10, choices=TRANSACTION_CHOICES)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     source = models.CharField(max_length=100, blank=True, null=True)
+    source_type = models.CharField(max_length=20, choices=SOURCE_TYPE_CHOICES, default="return")
+    reference_id = models.CharField(max_length=50, blank=True, null=True)
     description = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ['-created_at']
+        ordering = ["-created_at"]
 
     def __str__(self):
-        return f"{self.account.user.get_full_name()} - {self.transaction_type.upper()} ₹{self.amount} ({self.source})"
+        return (
+            f"{self.account.user.get_full_name()} - "
+            f"{self.transaction_type.upper()} ₹{self.amount} ({self.source_type}: {self.source})"
+        )
 
-    
 class ReplacementRequest(models.Model):
-    STATUS_CHOICES = [
-        ("pending", "Pending"),
+    # ---------------- Status Choices ----------------
+    INTERNAL_STATUS_CHOICES = [
+        # Admin / workflow flow
+        ("pending", "Pending Approval"),
         ("approved", "Approved"),
         ("rejected", "Rejected"),
-        ("shipped", "Shipped"),
-        ("delivered", "Delivered"),
         ("failed", "Failed"),
+
+        # Webhook-driven flow (mapped from Delhivery)
+        ("scheduled", "Exchange Scheduled"),
+        ("in_transit", "Exchange In Transit"),
+        ("completed", "Exchange Completed"),
+        ("cancelled", "Exchange Cancelled"),
     ]
 
-    # Links
-    new_order = models.OneToOneField(Order, on_delete=models.CASCADE, null=True, blank=True, related_name='replacement_origin')
-    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="replacement_requests")
-    order_item = models.ForeignKey(OrderItem, on_delete=models.CASCADE, null=True, blank=True, related_name="replacement_requests")
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="replacement_requests")
+    ADMIN_DECISION_CHOICES = [
+        ("pending", "Pending Approval"),
+        ("approved", "Approved"),
+        ("rejected", "Rejected"),
+    ]
 
-    # Request details
+    REPLACEMENT_STATUS_MAP = {
+        ("PP", "open"): "scheduled",
+        ("PP", "scheduled"): "scheduled",
+        ("PP", "dispatched"): "in_transit",
+        ("PU", "in transit"): "in_transit",
+        ("PU", "pending"): "in_transit",
+        ("PU", "dispatched"): "in_transit",
+        ("DL", "dto"): "completed",
+        ("CN", "canceled"): "cancelled",
+        ("CN", "closed"): "cancelled",
+    }
+
+
+    # ---------------- Links ----------------
+    new_order = models.OneToOneField(
+        Order,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="replacement_origin"
+    )
+    order = models.ForeignKey(
+        Order,
+        on_delete=models.CASCADE,
+        related_name="replacement_requests"
+    )
+    order_item = models.ForeignKey(
+        OrderItem,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="replacement_requests"
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="replacement_requests"
+    )
+    waybill = models.CharField(max_length=50, null=True, blank=True)
+
+    # ---------------- Request Details ----------------
     reason = models.TextField()
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    status = models.CharField(
+        max_length=20,
+        choices=INTERNAL_STATUS_CHOICES,
+        default="pending"
+    )
 
-    # Admin decision
-    admin_decision = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    admin_decision = models.CharField(
+        max_length=20,
+        choices=ADMIN_DECISION_CHOICES,
+        default="pending"
+    )
     admin_comment = models.TextField(blank=True, null=True)
-
-    # Variant policy snapshot (optional)
     variant_policy_snapshot = models.JSONField(null=True, blank=True)
 
-    # Timestamps
+    # ---------------- Delhivery Raw Status ----------------
+    delhivery_status_type = models.CharField(
+        max_length=5,
+        null=True,
+        blank=True,
+        help_text="Delhivery Status Type (PP, PU, DL, CN)"
+    )
+    delhivery_status = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Raw Delhivery status or error message"
+    )
+
+    delhivery_status_updated_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when Delhivery sent this status"
+    )
+    replacement_charge = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True
+    )
+
+    recovery_fixed = models.BooleanField(default=False)
+    # ---------------- Timestamps ----------------
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     shipped_at = models.DateTimeField(null=True, blank=True)
     delivered_at = models.DateTimeField(null=True, blank=True)
 
+    # ---------------- Meta ----------------
     class Meta:
         constraints = [
             models.UniqueConstraint(
                 fields=["order_item"],
-                condition=~models.Q(status__in=["delivered", "failed", "rejected"]),
+                condition=~models.Q(
+                    status__in=["completed", "failed", "rejected", "cancelled"]
+                ),
                 name="unique_active_replacement_per_item",
             )
         ]
 
-    def mark_shipped(self):
-        self.status = "shipped"
+    # ---------------- Helpers ----------------
+    def mark_in_transit(self):
+        self.status = "in_transit"
         self.shipped_at = timezone.now()
         self.save(update_fields=["status", "shipped_at"])
 
-    def mark_delivered(self):
-        self.status = "delivered"
+    def mark_completed(self):
+        self.status = "completed"
         self.delivered_at = timezone.now()
         self.save(update_fields=["status", "delivered_at"])
 
+
     def clean(self):
+        from django.core.exceptions import ValidationError
         if self.order_item:
             exists = ReplacementRequest.objects.filter(
                 order_item=self.order_item
-            ).exclude(pk=self.pk).exclude(status__in=["delivered", "failed", "rejected"]).exists()
+            ).exclude(pk=self.pk).exclude(
+                status__in=["completed", "failed", "rejected", "cancelled"]
+            ).exists()
             if exists:
                 raise ValidationError("A replacement is already in progress for this item.")
 
@@ -477,8 +680,78 @@ class ReplacementRequest(models.Model):
             raise ValidationError("A return request already exists for this item.")
 
         super().clean()
+        if self.status in ["scheduled", "in_transit"] and not self.waybill:
+            raise ValidationError("Waybill is required to start replacement shipment")
+
 
     def __str__(self):
-        return f"Replacement for Item #{self.order_item.id} in Order #{self.order.order_number}" if self.order_item else f"Replacement for Order #{self.order.order_number}"
-    
+        if self.order_item:
+            return f"Replacement for Item #{self.order_item.id} in Order #{self.order.order_number}"
+        return f"Replacement for Order #{self.order.order_number}"
 
+    def add_replacement_recovery(self,amount):
+        from decimal import Decimal
+
+        amount=Decimal(amount)
+
+        if self.recovery_fixed or amount <= 0:
+            return
+        account,_ = ReturnRecoveryAccount.objects.get_or_create(user=self.user)
+
+        already_added = ReturnRecoveryTransaction.objects.filter(
+            account=account,
+            source=f"ReplacementRequest #{self.id}",
+            source_type="replacement",
+            transaction_type="debit",
+        ).exists()
+
+        if already_added:
+            self.recovery_fixed = True
+            self.save(update_fields=["recovery_fixed"])
+            return
+        
+        account.add_recovery(
+            amount=amount,
+            source=f"ReplacementRequest #{self.id}",
+            source_type="replacement",
+            reference_id=self.new_order.order_number if self.new_order else None,
+        )
+        self.replacement_charge = amount
+        self.recovery_fixed = True
+        self.save(update_fields=["replacement_charge", "recovery_fixed"])
+
+    def update_delhivery_status(self, status_type, status_text, updated_at=None):
+        status_type = status_type.strip().upper()
+        status_text = status_text.strip().lower()
+
+        self.delhivery_status_type = status_type
+        self.delhivery_status = status_text
+        self.delhivery_status_updated_at = updated_at or timezone.now()
+
+        internal_status = self.REPLACEMENT_STATUS_MAP.get((status_type, status_text))
+
+        if internal_status:
+            self.status = internal_status
+
+            if internal_status == "in_transit":
+                self.shipped_at = timezone.now()
+
+                if self.order_item:
+                    self.order_item.status = OrderItemStatus.REPL_IN_TRANSIT
+                    self.order_item.save(update_fields=["status"])
+
+            elif internal_status == "completed":
+                self.delivered_at = timezone.now()
+
+                if self.order_item:
+                    self.order_item.status = OrderItemStatus.REPL_COMPLETED
+                    self.order_item.save(update_fields=["status"])
+
+        self.save(update_fields=[
+            "status",
+            "delhivery_status_type",
+            "delhivery_status",
+            "delhivery_status_updated_at",
+            "shipped_at",
+            "delivered_at",
+        ])

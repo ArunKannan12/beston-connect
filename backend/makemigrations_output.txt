@@ -1,0 +1,3 @@
+Migrations for 'promoter':
+  promoter\migrations\0024_promoter_total_sales_count.py
+    + Add field total_sales_count to promoter

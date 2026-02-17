@@ -1,158 +1,115 @@
 from decimal import Decimal
 from django.db import transaction
-from promoter.models import PromoterCommission, CommissionLevel
-import razorpay
 from django.utils import timezone
 from django.conf import settings
 import logging
+import razorpay
 
-from decimal import Decimal
-from django.db import transaction
-from promoter.models import PromoterCommission, CommissionLevel
+from promoter.models import PromoterCommission, CommissionLevel, Sale, Promoter, Subscription
 
 logger = logging.getLogger(__name__)
 
-def apply_promoter_commission(order):
+def apply_promoter_commission(item, status='pending'):
     """
-    Apply promoter commission per order item.
+    Apply promoter commission for a single OrderItem.
+    - status: 'credited' (direct to wallet) or 'pending' (requires later activation)
     """
-    logger.warning(f"[START] Applying commission for Order {order.id}")
+    logger.info(f"[START] Applying commission for Item {item.id} (Order {item.order.id})")
 
     # Load commission levels
     levels = list(CommissionLevel.objects.order_by("level").values("level", "percentage"))
-    logger.warning(f"[DEBUG] Loaded Commission Levels: {levels}")
-
     if not levels:
-        logger.warning("[SKIP] No CommissionLevel records found. Cannot apply commissions.")
+        logger.warning("[SKIP] No CommissionLevel records found.")
         return
 
-    total_order_commission = Decimal("0.00")
-    processed_promoters = set()
+    promoter = item.promoter
+    if not promoter:
+        logger.warning(f"[SKIP] Item {item.id}: No promoter assigned.")
+        return
+
+    variant = item.product_variant
+    base_rate = Decimal(variant.promoter_commission_rate or 0)
+    if base_rate <= 0:
+        logger.warning(f"[SKIP] Item {item.id}: Rate is {base_rate}.")
+        return
+
+    # Calculate item commission
+    item_total = Decimal(item.price) * item.quantity
+    item_commission = (item_total * base_rate) / 100
 
     with transaction.atomic():
-        items = order.items.all()
-        logger.warning(f"[DEBUG] Order {order.id} has {items.count()} items")
+        # Update order item fields
+        item.promoter_commission_amount = item_commission
+        item.promoter_commission_rate = base_rate
+        item.save(update_fields=['promoter_commission_amount', 'promoter_commission_rate'])
 
-        for item in items:
-            logger.warning(f"[ITEM] Checking OrderItem {item.id}")
+        # Multi-level distribution
+        current_promoter = promoter
+        remaining_commission = item_commission
+        level1_record = None
 
-            promoter = item.promoter
-            logger.warning(f"[DEBUG] Item {item.id} promoter = {promoter}")
+        for level_info in levels:
+            if not current_promoter:
+                break
 
-            if not promoter:
-                logger.warning(f"[SKIP] Item {item.id}: No promoter assigned")
-                continue
+            share = (item_commission * Decimal(level_info["percentage"])) / 100
+            remaining_commission -= share
 
-            variant = item.product_variant
-            base_rate = Decimal(variant.promoter_commission_rate or 0)
-            logger.warning(f"[DEBUG] Item {item.id} commission rate = {base_rate}")
+            # Determine the status for this specific commission record
+            # If the cron said 'credited', we check if THIS promoter in the chain is paid.
+            # If cron said 'pending', everyone gets pending.
+            if status == 'credited' and current_promoter.promoter_type == 'paid':
+                record_status = 'paid'
+            else:
+                record_status = 'pending'
 
-            if base_rate <= 0:
-                logger.warning(f"[SKIP] Item {item.id}: promoter_commission_rate={base_rate}")
-                continue
+            earning_type = 'direct_sale' if level_info['level'] == 1 else 'referral_sale'
+            pc = PromoterCommission.objects.create(
+                promoter=current_promoter,
+                order=item.order,
+                product_variant=item.product_variant,
+                level=level_info['level'],
+                amount=share,
+                status=record_status,
+                earning_type=earning_type,
+                referral_source_promoter=promoter
+            )
 
-            # Calculate item commission
-            item_total = Decimal(item.price) * item.quantity
-            item_commission = (item_total * base_rate) / 100
-            logger.warning(f"[CALC] Item {item.id}: total={item_total}, commission={item_commission}")
+            # Credit wallet if status ended up as 'paid'
+            if record_status == 'paid':
+                current_promoter.add_commission(share, credit_wallet=True)
+                logger.info(f"[WALLET] Credited {share} to promoter {current_promoter.id}")
+            else:
+                # Still track earned even if not credited to wallet yet
+                current_promoter.add_commission(share, credit_wallet=False)
+                logger.info(f"[PENDING] Added {share} earned for promoter {current_promoter.id}")
 
-            total_order_commission += item_commission
+            if level_info['level'] == 1:
+                level1_record = pc
 
-            # Update order item fields
-            item.promoter_commission_amount = item_commission
-            item.promoter_commission_rate = base_rate
-            item.save(update_fields=['promoter_commission_amount', 'promoter_commission_rate'])
-            logger.warning(f"[UPDATE] Saved commission fields for Item {item.id}")
+            # Upline traversal using the property we added
+            current_promoter = current_promoter.referred_by
 
-            # Multi-level commission distribution
-            existing_commissions = PromoterCommission.objects.filter(order=order, product_variant=item.product_variant)
-            current_promoter = promoter
-            remaining_commission = item_commission
-            level1_record = None
+        # Merge leftover into Level 1
+        if remaining_commission > 0 and level1_record:
+            level1_record.amount += remaining_commission
+            level1_record.save(update_fields=['amount'])
+            
+            # Credit the leftover according to the Level 1 status
+            is_paid = (level1_record.status == 'paid')
+            promoter.add_commission(remaining_commission, credit_wallet=is_paid)
+            logger.info(f"[MERGE] Merged leftover {remaining_commission} into Level 1")
 
-            logger.warning(f"[DEBUG] Starting multi-level distribution for Item {item.id}")
+        # Increment total_sales_count for the direct promoter
+        promoter.total_sales_count += 1
+        promoter.save(update_fields=["total_sales_count"])
 
-            for level_info in levels:
-                logger.warning(f"[LEVEL] Processing Level {level_info['level']} for promoter {current_promoter}")
+        # Update order totals (incrementally)
+        order = item.order
+        order.total_commission += item_commission
+        order.save(update_fields=["total_commission"])
 
-                if not current_promoter:
-                    logger.warning("[BREAK] No more uplines")
-                    break
-
-                share = (item_commission * Decimal(level_info["percentage"])) / 100
-                remaining_commission -= share
-
-                pc = existing_commissions.filter(promoter=current_promoter, level=level_info['level']).first()
-                old_amount = Decimal('0.00')
-
-                if pc:
-                    old_amount = pc.amount
-                    pc.amount = share
-                    pc.status = 'paid' if current_promoter.promoter_type == 'paid' else 'pending'
-                    pc.save(update_fields=['amount', 'status'])
-                    logger.warning(f"[UPDATE] Item {item.id}, Level {level_info['level']}: {old_amount} → {share}")
-                else:
-                    pc = PromoterCommission.objects.create(
-                        promoter=current_promoter,
-                        order=order,
-                        product_variant=item.product_variant,
-                        level=level_info['level'],
-                        amount=share,
-                        status='paid' if current_promoter.promoter_type == 'paid' else 'pending'
-                    )
-                    logger.warning(f"[CREATE] Item {item.id}, Level {level_info['level']}: {share}")
-
-                # ✅ FIXED: Correct commission earned logic
-                if current_promoter.promoter_type == "paid":
-                    # Wallet + earned handled inside add_commission()
-                    diff = share - old_amount
-                    if diff != 0:
-                        current_promoter.add_commission(diff, credit_wallet=True)
-                        logger.warning(f"[WALLET] Credited wallet diff={diff} for promoter {current_promoter.id}")
-                else:
-                    # Free promoter → manually update earned
-                    current_promoter.total_commission_earned += share
-                    current_promoter.save(update_fields=["total_commission_earned"])
-                    logger.warning(f"[WALLET] Added {share} to FREE promoter {current_promoter.id}")
-
-                if level_info['level'] == 1:
-                    level1_record = pc
-
-                current_promoter = getattr(current_promoter, 'referred_by', None)
-
-            # ✅ FIXED: Merge leftover into Level 1
-            if remaining_commission > 0 and level1_record:
-                old_amount = level1_record.amount
-                level1_record.amount += remaining_commission
-                level1_record.save(update_fields=['amount'])
-
-                if promoter.promoter_type == "paid":
-                    promoter.add_commission(remaining_commission, credit_wallet=True)
-                else:
-                    promoter.total_commission_earned += remaining_commission
-                    promoter.save(update_fields=["total_commission_earned"])
-
-                logger.warning(
-                    f"[MERGE] Item {item.id}: leftover {remaining_commission} merged into Level 1 "
-                    f"({old_amount} → {level1_record.amount})"
-                )
-
-            # Increment total_sales_count once per promoter per order
-            if promoter.id not in processed_promoters:
-                promoter.total_sales_count += 1
-                promoter.save(update_fields=["total_sales_count"])
-                processed_promoters.add(promoter.id)
-                logger.warning(f"[SALES] Incremented total_sales_count for promoter {promoter.id}")
-
-        # Update order totals
-        order.total_commission = total_order_commission
-        order.is_commission_applied = True
-        order.save(update_fields=["total_commission", "is_commission_applied"])
-
-        logger.warning(
-            f"[END] Order {order.id}: total_commission={total_order_commission}, "
-            f"is_commission_applied=True"
-        )
+    logger.info(f"[END] Item {item.id} commission processed.")
 
 def process_pending_commission(promoter):
     """
@@ -176,36 +133,34 @@ def process_pending_commission(promoter):
     else:
         print(f"[Summary] No pending commissions to process for {promoter.user.email}")
 
-def initiate_payout_to_promoter(withdrawal, use_mock=True):
-    """
-    Initiates payout to promoter.
-    
-    If `use_mock=True`, simulates a payout for testing.
-    Once RazorpayX keys are ready, set `use_mock=False` to call the real API.
-    """
-    if use_mock:
-        # Mock response for testing
-        withdrawal.status = 'processing'
-        withdrawal.processed_at = timezone.now()
-        withdrawal.razorpay_payout_id = f"mock_{withdrawal.id}"
-        withdrawal.save()
-        print(f"[MOCK] Payout of ₹{withdrawal.amount} to {withdrawal.promoter.user.email}")
-        return {"id": withdrawal.razorpay_payout_id, "status": "processing"}
 
-    # Placeholder for RazorpayX API call
-    # import razorpay
-    # client = razorpay.Client(auth=(settings.RAZORPAYX_KEY_ID, settings.RAZORPAYX_KEY_SECRET))
-    # resp = client.payout.create({
-    #     "account_number": withdrawal.promoter.bank_account_number,
-    #     "amount": int(withdrawal.amount * 100),  # in paise
-    #     "currency": "INR",
-    #     "mode": "IMPS",
-    #     "purpose": "payout",
-    #     "narration": f"Withdrawal #{withdrawal.id}",
-    #     "fund_account": "...",  # linked RazorpayX fund account
-    # })
-    # withdrawal.razorpay_payout_id = resp['id']
-    # withdrawal.status = 'processing'
-    # withdrawal.processed_at = timezone.now()
-    # withdrawal.save()
-    # return resp
+def get_commission_levels():
+    """Return all commission levels ordered by level."""
+    return CommissionLevel.objects.order_by('level')
+
+def process_sale_commission(sale: Sale):
+    if sale.status != 'completed':
+        return
+
+    if PromoterCommission.objects.filter(order=sale).exists():
+        return
+
+    current_promoter = sale.promoter
+    base_amount = sale.commission_amount
+
+    for level in CommissionLevel.objects.order_by("level"):
+        if not current_promoter:
+            break
+
+        amount = base_amount * level.percentage / Decimal("100")
+
+        PromoterCommission.objects.create(
+            promoter=current_promoter,
+            order=sale,
+            product_variant=sale.product_variant,
+            level=level.level,
+            amount=amount,
+            status="confirmed"
+        )
+
+        current_promoter = current_promoter.referred_by

@@ -4,6 +4,8 @@ from django.utils.text import slugify
 from django.utils.crypto import get_random_string
 from rest_framework.exceptions import ValidationError
 import cloudinary.uploader
+from django.contrib.auth import get_user_model
+User=get_user_model()
 
 class Category(models.Model):
     name = models.CharField(max_length=100, unique=True)
@@ -104,6 +106,8 @@ class ProductVariant(models.Model):
         default=0.00,
         help_text="Fixed commission % for promoters on this product"
     )
+    average_rating = models.FloatField(default=0)
+    rating_count = models.PositiveIntegerField(default=0)
 
     def clean(self):
         errors = {}
@@ -136,6 +140,30 @@ class ProductVariant(models.Model):
         
     def __str__(self):
         return f"{self.product.name} - {self.variant_name}"
+
+
+class ProductRating(models.Model):
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="product_ratings"
+    )
+    product = models.ForeignKey(
+        "products.ProductVariant",
+        on_delete=models.CASCADE,
+        related_name="ratings"
+    )
+    rating = models.PositiveSmallIntegerField()
+    review = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("user", "product")
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.user} → {self.product} ({self.rating}★)"
 
 class BaseImage(models.Model):
     image = models.ImageField(upload_to='uploads/', blank=True, null=True)
@@ -220,4 +248,5 @@ class Banner(models.Model):
             return format_html('<img src="{}" width="100" />', self.image_url)
         return "-"
     image_tag.short_description = 'Preview'
+
 

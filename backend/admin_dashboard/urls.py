@@ -20,9 +20,14 @@ from .views import (
                     VariantBulkActionAPIView,
                     MarkPackedBulkAPIView,
                     DelhiveryWebhookAPIView,
-                    OrdersPackingListAPIView
+                    OrdersPackingListAPIView,
+                    ContactMessageAPIView,
+                    ContactMessageListAPIView,
+                    ContactMessageDetailAPIView,
+                    DeleteContactMessageAPIView,
+                    ResolveContactMessageAPIView
                     )
-from orders.returnReplacement import ReturnRequestUpdateAPIView,ReplacementRequestUpdateAPIView,ReturnRequestDetailAPIView,ReturnRequestRefundAPIView
+from orders.returnReplacement import ReturnRequestBulkUpdateAPIView,ReplacementRequestUpdateAPIView,ReturnRequestDetailAPIView,ReturnRequestRefundAPIView
 from .warehouseViews import CreateDelhiveryPickupRequestAPIView,DelhiveryPickupRequestListAPIView,EligibleOrdersForPickupAPIView
 
 urlpatterns = [
@@ -41,8 +46,8 @@ urlpatterns = [
 
     path("admin/returns/", AdminReturnRequestListAPIView.as_view(), name="admin-return-list"),
     path("admin/returns/<int:returnId>/", ReturnRequestDetailAPIView.as_view(), name="admin-return-detail"),
-    path("admin/returns/<int:returnId>/update/", ReturnRequestUpdateAPIView.as_view(), name="admin-return-update"),
-    path('admin/returns/<int:return_id>/process_refund/', ReturnRequestRefundAPIView.as_view(), name='return-refund'),
+    path("admin/returns/bulk-update/",ReturnRequestBulkUpdateAPIView.as_view(), name="return-request-bulk-update"),
+    path('admin/returns/refund/', ReturnRequestRefundAPIView.as_view(), name='return-refund'),
     path("admin/replacements/", AdminReplacementRequestListAPIView.as_view(), name="admin-return-list"),
     path("admin/replacements/<int:pk>/", AdminReplacementRequestdetailAPIView.as_view(), name="admin-return-detail"),
     path("admin/replacements/<int:pk>/update/", ReplacementRequestUpdateAPIView.as_view(), name="admin-return-update"),
@@ -70,6 +75,13 @@ urlpatterns = [
     path("delhivery/pickup-requests/", DelhiveryPickupRequestListAPIView.as_view(), name="pickup-request-list"),
     path("delhivery/eligible-for-pickup/", EligibleOrdersForPickupAPIView.as_view(), name="order-for-picking-list"),
     
+
+    path('contact/', ContactMessageAPIView.as_view(), name='contact-message'),
+    path("admin/contact/", ContactMessageListAPIView.as_view(), name="admin-contact-list"),
+    path("admin/contact/<int:pk>/", ContactMessageDetailAPIView.as_view(), name="admin-contact-detail"),
+    path("admin/contact/<int:pk>/resolve/", ResolveContactMessageAPIView.as_view(), name="admin-contact-resolve"),
+    path("admin/contact/<int:pk>/delete/", DeleteContactMessageAPIView.as_view(), name="admin-contact-delete"),
+
 ]
 
 

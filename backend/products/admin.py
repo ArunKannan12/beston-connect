@@ -1,7 +1,7 @@
 import nested_admin
 from django.contrib import admin
 from django.utils.safestring import mark_safe
-from .models import Category, Product, ProductVariant, ProductVariantImage,Banner
+from .models import Category, Product, ProductVariant, ProductVariantImage,Banner,ProductRating
 from .forms import ProductVariantForm
 
 # --------------------- CATEGORY ---------------------
@@ -29,7 +29,7 @@ class ProductVariantInline(nested_admin.NestedTabularInline):
     fields = (
         'variant_name', 'sku', 'base_price', 'offer_price','weight',
         'stock','featured', 'is_active', 'promoter_commission_rate',
-        'allow_return', 'return_days',           
+        'allow_return', 'return_days',  "average_rating", "rating_count",        
         'allow_replacement', 'replacement_days'  
     )
     readonly_fields = ('final_price_display',)
@@ -38,6 +38,13 @@ class ProductVariantInline(nested_admin.NestedTabularInline):
         return obj.final_price
     final_price_display.short_description = "Final Price"
 
+@admin.register(ProductRating)
+class ProductRatingAdmin(admin.ModelAdmin):
+    list_display = ("id", "product", "user", "rating", "created_at")
+    list_filter = ("rating", "created_at", "product")
+    search_fields = ("user__email", "product__name", "review")
+    readonly_fields = ("created_at", "updated_at")
+    ordering = ("-created_at",)
 
 # --------------------- PRODUCTS ---------------------
 @admin.register(Product)
@@ -121,3 +128,4 @@ class BannerAdmin(admin.ModelAdmin):
             "classes": ("collapse",)
         }),
     )
+

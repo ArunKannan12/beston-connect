@@ -1,0 +1,7 @@
+53 objects imported automatically (use -v 2 for details).
+
+Initial: paid, active
+Found 1 subscriptions to expire.
+Successfully expired subscription for arunkannan1701@gmail.com
+Processed 1 subscriptions.
+Final: unpaid, expired

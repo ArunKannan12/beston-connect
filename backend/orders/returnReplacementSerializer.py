@@ -1,123 +1,235 @@
 
 from rest_framework import serializers
 from .serializers import OrderItemLightSerializer,OrderLightSerializer,ShippingAddressSerializer
-from .models import ReturnRequest,ReplacementRequest,Order,OrderItem
+from .models import ReturnRequest,ReplacementRequest,Order,OrderItem,OrderItemStatus,OrderStatus
 from django.utils import timezone
+from rest_framework.exceptions import PermissionDenied
+from rest_framework import serializers
+from django.utils import timezone
+from decimal import Decimal
+
+
+
+ACTIVE_RETURN_STATUSES = [
+    "pending",
+    "pp_open",
+    "pp_scheduled",
+    "pp_dispatched",
+    "pu_in_transit",
+    "pu_pending",
+]
 
 class ReturnRequestSerializer(serializers.ModelSerializer):
+    # Nested read-only serializers
     order = OrderLightSerializer(read_only=True)
     order_item = OrderItemLightSerializer(read_only=True)
-    shipping_address = serializers.SerializerMethodField(read_only=True)
-    product = serializers.SerializerMethodField(read_only=True)
-    variant = serializers.SerializerMethodField(read_only=True)
-    variant_images = serializers.SerializerMethodField(read_only=True)
-    product_image = serializers.SerializerMethodField(read_only=True)
-    order_number = serializers.CharField(write_only=True)
-    order_item_id = serializers.PrimaryKeyRelatedField(queryset=OrderItem.objects.all(), write_only=True)
+
+    # Write-only fields
+    order_number = serializers.CharField(write_only=True, required=True)
+    order_item_list = serializers.ListField(
+        child=serializers.PrimaryKeyRelatedField(queryset=OrderItem.objects.all()),
+        write_only=True,
+        required=True
+    )
+
+    # Computed read-only fields
+    shipping_address = serializers.SerializerMethodField()
+    product = serializers.SerializerMethodField()
+    variant = serializers.SerializerMethodField()
+    variant_images = serializers.SerializerMethodField()
+    product_image = serializers.SerializerMethodField()
     return_days_remaining = serializers.SerializerMethodField()
+
     class Meta:
         model = ReturnRequest
         fields = [
-            "id", "order", "order_item", "order_number", "order_item_id",
-            "reason", "status", "refund_amount",
-            "waybill", "pickup_date", "delivered_back_date",'return_days_remaining',
-            "admin_comment", "created_at", "updated_at", "refunded_at",
-            "product", "variant", "variant_images", "product_image", "shipping_address"
+            "id",
+            "order",
+            "order_item",
+            "order_number",
+            "order_item_list",
+            "reason",
+            "status",
+            "refund_amount",
+            "waybill",
+            "pickup_date",
+            "delivered_back_date",
+            "return_days_remaining",
+            "admin_comment",
+            "created_at",
+            "updated_at",
+            "refunded_at",
+            "product",
+            "variant",
+            "variant_images",
+            "product_image",
+            "shipping_address",
         ]
         read_only_fields = [
-            "order", "order_item", "refund_amount", "waybill",
-            "pickup_date", "delivered_back_date", "admin_comment",
-            "created_at", "updated_at", "refunded_at",
-            "product", "variant", "variant_images", "product_image", "shipping_address"
+            "order",
+            "order_item",
+            "status",
+            "refund_amount",
+            "waybill",
+            "pickup_date",
+            "delivered_back_date",
+            "admin_comment",
+            "created_at",
+            "updated_at",
+            "refunded_at",
+            "product",
+            "variant",
+            "variant_images",
+            "product_image",
+            "shipping_address",
         ]
 
+    # -------------------- Validation --------------------
     def validate(self, attrs):
         user = self.context["request"].user
-        if self.instance is None:
-            order_number = attrs.get("order_number")
-            order_item = attrs.get("order_item_id")
 
-            if not order_number or not order_item:
-                raise serializers.ValidationError("Both 'order_number' and 'order_item_id' are required.")
+        order_number = attrs.get("order_number")
+        order_items = attrs.get("order_item_list", [])
 
-            try:
-                order = Order.objects.get(order_number=order_number)
-            except Order.DoesNotExist:
-                raise serializers.ValidationError({"order_number": "Order not found."})
+        if not order_number or not order_items:
+            raise serializers.ValidationError(
+                "Order number and at least one order item are required."
+            )
 
-            if order_item.order != order:
-                raise serializers.ValidationError({"order_item_id": "Order item not found for this order."})
+        try:
+            order = Order.objects.get(order_number=order_number)
+        except Order.DoesNotExist:
+            raise serializers.ValidationError({"order_number": "Order not found."})
 
-            if order.user != user:
-                raise serializers.ValidationError("You can only request a return for your own orders.")
+        if order.user != user:
+            raise serializers.ValidationError(
+                "You can only return items from your own orders."
+            )
 
-            if order.status.lower() != "delivered":
-                raise serializers.ValidationError("Return requests can only be created for delivered orders.")
+        if order.status != OrderStatus.DELIVERED:
+            raise serializers.ValidationError(
+                "Return requests are allowed only after delivery."
+            )
 
-            variant = order_item.product_variant
-            if not variant.allow_return:
-                raise serializers.ValidationError("This product is not eligible for return.")
-
-            # --- New: Check for duplicate active return ---
-            active_return_exists = ReturnRequest.objects.filter(
-                order_item=order_item
-            ).exclude(status='refunded').exists()
-
-            if active_return_exists:
+        validated_items = []
+        for item in order_items:
+            if item.order != order:
                 raise serializers.ValidationError(
-                    f"A return request is already in progress for this item (OrderItem ID {order_item.id})."
+                    {"order_item_list": f"Item {item.id} does not belong to this order."}
                 )
 
-            attrs["order"] = order
-            attrs["order_item"] = order_item
+            variant = item.product_variant
+            if not variant.allow_return:
+                raise serializers.ValidationError(
+                    f"Product {variant.product.name} is not eligible for return."
+                )
 
+            if not order.delivered_at:
+                raise serializers.ValidationError("Delivery date not available.")
+
+            days_passed = (timezone.now().date() - order.delivered_at.date()).days
+            if days_passed > variant.return_days:
+                raise serializers.ValidationError(
+                    f"Return window expired for item {item.id}. Allowed {variant.return_days} days."
+                )
+
+            if ReturnRequest.objects.filter(
+                order_item=item, status__in=ACTIVE_RETURN_STATUSES
+            ).exists():
+                raise serializers.ValidationError(
+                    f"A return request is already in progress for item {item.id}."
+                )
+
+            validated_items.append(item)
+
+        attrs["order"] = order
+        attrs["order_item_list"] = validated_items
         return attrs
 
-
+    # -------------------- Create --------------------
     def create(self, validated_data):
         order = validated_data.pop("order")
-        order_item = validated_data.pop("order_item")
-        validated_data.pop("order_number", None)
-        validated_data.pop("order_item_id", None)
+        order_items = validated_data.pop("order_item_list", [])
 
-        refund_amount = order_item.price * order_item.quantity
-        
-        return ReturnRequest.objects.create(
-            order=order,
-            order_item=order_item,
-            refund_amount=refund_amount,
-            **validated_data
-        )
+        created_requests = []
 
+        for item in order_items:
+            refund_amount = item.price * item.quantity
+            rr = ReturnRequest.objects.create(
+                order=order,
+                order_item=item,
+                refund_amount=refund_amount,
+                status="pending",
+                user=self.context["request"].user,
+                reason=validated_data.get("reason", "")
+            )
+
+            item.status = OrderItemStatus.RETURN_INITIATED
+            item.save(update_fields=["status"])
+
+            created_requests.append(rr)
+
+        # Return single object if only one request, else list
+        if len(created_requests) == 1:
+            return created_requests[0]
+        return created_requests
+
+    # -------------------- SerializerMethodField helpers --------------------
     def get_shipping_address(self, obj):
-        if obj.order and hasattr(obj.order, "shipping_address"):
-            return ShippingAddressSerializer(obj.order.shipping_address).data
+        order = getattr(obj, "order", None)
+        if order and getattr(order, "shipping_address", None):
+            return ShippingAddressSerializer(order.shipping_address).data
         return None
 
     def get_product(self, obj):
-        return getattr(obj.order_item.product_variant.product, "name", None)
+        item = getattr(obj, "order_item", None)
+        if not item or not getattr(item, "product_variant", None):
+            return None
+        product = getattr(item.product_variant, "product", None)
+        return getattr(product, "name", None) if product else None
 
     def get_variant(self, obj):
-        return getattr(obj.order_item.product_variant, "variant_name", None)
+        item = getattr(obj, "order_item", None)
+        if not item or not getattr(item, "product_variant", None):
+            return None
+        return getattr(item.product_variant, "variant_name", None)
 
     def get_variant_images(self, obj):
-        if obj.order_item and obj.order_item.product_variant:
-            return [img.url for img in obj.order_item.product_variant.images.all() if img.url]
-        return []
+        item = getattr(obj, "order_item", None)
+        if not item or not getattr(item, "product_variant", None):
+            return []
+        images = getattr(item.product_variant, "images", None)
+        if not images:
+            return []
+        return [img.url for img in images.all() if getattr(img, "url", None)]
 
     def get_product_image(self, obj):
-        product = getattr(obj.order_item.product_variant, "product", None)
-        return getattr(product, "image_url", None) or getattr(product, "image", None)
+        item = getattr(obj, "order_item", None)
+        if not item or not getattr(item, "product_variant", None):
+            return None
+        product = getattr(item.product_variant, "product", None)
+        if not product:
+            return None
+        return product.image_url or (product.image.url if product.image else None)
+
     def get_return_days_remaining(self, obj):
-        """
-        Returns the number of days left for return based on product's allowed return_days.
-        """
-        if obj.order_item and obj.order_item.product_variant:
-            allowed_days = obj.order_item.product_variant.return_days
-            days_passed = (timezone.now().date() - obj.created_at.date()).days
-            remaining = allowed_days - days_passed
-            return max(0, remaining)
-        return 0
+        item = getattr(obj, "order_item", None)
+        if not item or not getattr(item.order, "delivered_at", None):
+            return 0
+        allowed_days = getattr(item.product_variant, "return_days", 0) or 0
+        delivered_date = item.order.delivered_at.date()
+        days_passed = (timezone.now().date() - delivered_date).days
+        return max(0, allowed_days - days_passed)
+
+
+
+
+from rest_framework import serializers
+from rest_framework.exceptions import PermissionDenied
+from django.utils import timezone
+from decimal import Decimal
+from .models import ReplacementRequest, Order, OrderItem, ShippingAddress
+
 class ReplacementRequestSerializer(serializers.ModelSerializer):
     order = OrderLightSerializer(read_only=True)
     order_item = OrderItemLightSerializer(read_only=True)
@@ -128,11 +240,17 @@ class ReplacementRequestSerializer(serializers.ModelSerializer):
     variant_images = serializers.SerializerMethodField(read_only=True)
     replacement_days_remaining = serializers.SerializerMethodField(read_only=True)
     is_replacement_eligible = serializers.SerializerMethodField(read_only=True)
-
     variant_policy_snapshot = serializers.JSONField(read_only=True)
 
-    order_number = serializers.PrimaryKeyRelatedField(queryset=Order.objects.all(), write_only=True, required=False)
-    order_item_id = serializers.PrimaryKeyRelatedField(queryset=OrderItem.objects.all(), write_only=True, required=False)
+    # ---------------------- WRITE FIELDS ----------------------
+    order_number = serializers.CharField(write_only=True, required=False)
+    order_item_id = serializers.PrimaryKeyRelatedField(queryset=OrderItem.objects.all(), write_only=True)
+    admin_decision = serializers.ChoiceField(
+        choices=ReplacementRequest.ADMIN_DECISION_CHOICES,
+        required=False,
+        write_only=True
+    )
+    admin_comment = serializers.CharField(required=False, allow_blank=True, write_only=True)
 
     class Meta:
         model = ReplacementRequest
@@ -142,7 +260,7 @@ class ReplacementRequestSerializer(serializers.ModelSerializer):
             "created_at", "updated_at",
             "product", "variant", "variant_images", "shipping_address",
             "replacement_days_remaining", "is_replacement_eligible",
-            "variant_policy_snapshot"
+            "variant_policy_snapshot", "admin_decision", "admin_comment"
         ]
         read_only_fields = [
             "order", "order_item", "new_order",
@@ -153,33 +271,68 @@ class ReplacementRequestSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         user = self.context["request"].user
-        if self.instance:
-            order = self.instance.order
-            order_item = self.instance.order_item
-        else:
-            order = attrs.get("order_number")
+        role = getattr(user, "role", None)
+
+        # Customers cannot update existing requests
+        if self.instance and role == "customer":
+            raise PermissionDenied(
+                "Customers cannot update replacement requests once created."
+            )
+
+        if not self.instance:
+            order_number = attrs.get("order_number")
             order_item = attrs.get("order_item_id")
 
-            if not order or not order_item:
-                raise serializers.ValidationError("Order and order item are required.")
+            if not order_number or not order_item:
+                raise serializers.ValidationError(
+                    "Order number and order item are required."
+                )
+
+            try:
+                order = Order.objects.get(order_number=order_number)
+            except Order.DoesNotExist:
+                raise serializers.ValidationError({"order_number": "Invalid order number."})
 
             if order.user != user:
-                raise serializers.ValidationError("You can only request a replacement for your own orders.")
+                raise serializers.ValidationError(
+                    "You can only request a replacement for your own orders."
+                )
 
             if order_item.order != order:
-                raise serializers.ValidationError("Order item does not belong to this order.")
+                raise serializers.ValidationError(
+                    "Order item does not belong to this order."
+                )
 
-            if order.status.lower() != "delivered":
-                raise serializers.ValidationError("Replacement requests can only be created for delivered orders.")
+            if order.status.lower() != OrderStatus.DELIVERED:
+                raise serializers.ValidationError(
+                    "Replacement requests can only be created for delivered orders."
+                )
 
-            if not order_item.product_variant.allow_replacement:
-                raise serializers.ValidationError("This product is not eligible for replacement.")
+            variant = order_item.product_variant
+            days_since_order = (timezone.now().date() - order.created_at.date()).days
+
+            # ---- New replacement period check ----
+            if not variant.allow_replacement or days_since_order > variant.replacement_days:
+                raise serializers.ValidationError(
+                    "Replacement period has expired. Cannot create a replacement request."
+                )
+
+            if ReplacementRequest.objects.filter(order_item=order_item).exists():
+                raise serializers.ValidationError(
+                    "Replacement request already exists for this item."
+                )
+
+            # Pass the actual order instance forward
+            attrs["order"] = order
 
         return attrs
 
+
     def create(self, validated_data):
-        order = validated_data.pop("order_number")
+        order_number = validated_data.pop("order_number")
+        order = validated_data.pop("order")  # actual Order instance
         order_item = validated_data.pop("order_item_id")
+        reason = validated_data.pop("reason")
 
         variant = order_item.product_variant
         validated_data["variant_policy_snapshot"] = {
@@ -187,12 +340,15 @@ class ReplacementRequestSerializer(serializers.ModelSerializer):
             "replacement_days": variant.replacement_days,
         }
 
+        # Create ReplacementRequest
         instance = ReplacementRequest.objects.create(
             order=order,
             order_item=order_item,
+            reason=reason,
             **validated_data
         )
 
+        # Create Replacement Order
         new_order = Order.objects.create(
             user=order.user,
             shipping_address=order.shipping_address,
@@ -213,6 +369,7 @@ class ReplacementRequestSerializer(serializers.ModelSerializer):
         instance.save(update_fields=["new_order"])
         return instance
 
+    # -------------------- READ METHODS --------------------
     def get_shipping_address(self, obj):
         return ShippingAddressSerializer(obj.order.shipping_address).data if obj.order.shipping_address else None
 
@@ -224,15 +381,18 @@ class ReplacementRequestSerializer(serializers.ModelSerializer):
 
     def get_variant_images(self, obj):
         if obj.order_item and obj.order_item.product_variant:
+            # First try the property .url on each image object
             return [img.url for img in obj.order_item.product_variant.images.all() if img.url]
         return []
 
     def get_replacement_days_remaining(self, obj):
         variant = obj.order_item.product_variant
+        allowed_days = variant.replacement_days or 0
         delta = (timezone.now().date() - obj.order.created_at.date()).days
-        return max(variant.replacement_days - delta, 0) if variant.allow_replacement else 0
+        return max(allowed_days - delta, 0) if variant.allow_replacement else 0
 
     def get_is_replacement_eligible(self, obj):
         variant = obj.order_item.product_variant
+        allowed_days = variant.replacement_days or 0
         delta = (timezone.now().date() - obj.order.created_at.date()).days
-        return variant.allow_replacement and delta <= variant.replacement_days
+        return variant.allow_replacement and delta <= allowed_days

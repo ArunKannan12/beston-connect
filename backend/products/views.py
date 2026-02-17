@@ -1,18 +1,25 @@
 from rest_framework import generics, permissions, filters
 from django_filters.rest_framework import DjangoFilterBackend
-from .models import Product, ProductVariant, Category, ProductVariantImage,Banner
+from .models import Product, ProductVariant, Category, ProductVariantImage,Banner,ProductRating
 from .serializers import (
     ProductSerializer, CategorySerializer,BannerSerializer,
-    ProductVariantSerializer, ProductVariantImageSerializer
+    ProductVariantSerializer, ProductVariantImageSerializer,
+   
 )
+from django.db import transaction
+from rest_framework.permissions import AllowAny
+from rest_framework.generics import ListAPIView
+from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 from datetime import timedelta
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from accounts.permissions import IsAdmin, IsAdminOrReadOnly
+from accounts.permissions import IsAdmin, IsAdminOrReadOnly,IsCustomer
 from rest_framework.exceptions import ValidationError
-from django.db.models import F,Q,Min,Max,Sum
+from django.db.models import F,Q,Min,Max,Sum,Avg,Count
+from .serializers import ProductRatingCreateUpdateSerializer,ProductRatingListSerializer
+from .utils import user_can_rate_product,update_product_rating_stats
 
 NEW_PRODUCT_DAYS = 7
 
@@ -285,5 +292,112 @@ class CustomerBannerListAPIView(generics.ListAPIView):
     serializer_class = BannerSerializer
     permission_classes = [permissions.AllowAny]
 
+class CreateProductRatingAPIView(APIView):
+    permission_classes = [IsCustomer, IsAuthenticated]
+
+    def post(self, request, product_id):
+        user = request.user
+
+        try:
+            product = ProductVariant.objects.get(id=product_id)
+        except ProductVariant.DoesNotExist:
+            return Response(
+                {"detail": "Product not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if not user_can_rate_product(user, product):
+            return Response(
+                {"detail": "You can rate only products you purchased"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if ProductRating.objects.filter(user=user, product=product).exists():
+            return Response(
+                {"detail": "You have already rated this product"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = ProductRatingCreateUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(user=user, product=product)
+
+        update_product_rating_stats(product)
+
+        return Response(
+            {"detail": "Rating added", "rating": serializer.data},
+            status=status.HTTP_201_CREATED
+        )
+
+class MyProductRatingAPIView(APIView):
+    permission_classes = [IsCustomer, IsAuthenticated]
+
+    def get_object(self, user, product_id):
+        try:
+            return ProductRating.objects.get(user=user, product_id=product_id)
+        except ProductRating.DoesNotExist:
+            return None
+
+    # 🔹 Fetch my rating
+    def get(self, request, product_id):
+        rating = self.get_object(request.user, product_id)
+        if not rating:
+            return Response({"detail": "Rating not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = ProductRatingCreateUpdateSerializer(rating)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    # 🔹 Update my rating
+    def patch(self, request, product_id):
+        rating = self.get_object(request.user, product_id)
+        if not rating:
+            return Response({"detail": "Rating not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = ProductRatingCreateUpdateSerializer(rating, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        update_product_rating_stats(rating.product)
+
+        return Response({"detail": "Rating updated", "rating": serializer.data}, status=status.HTTP_200_OK)
+
+    # 🔹 Delete my rating
+    def delete(self, request, product_id):
+        rating = self.get_object(request.user, product_id)
+        if not rating:
+            return Response({"detail": "Rating not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        product = rating.product
+        with transaction.atomic():
+            rating.delete()
+            update_product_rating_stats(product)
+
+        return Response({"detail": "Rating deleted successfully"}, status=status.HTTP_200_OK)
+
+
+class ProductRatingListAPIView(ListAPIView):
+    serializer_class = ProductRatingListSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        return ProductRating.objects.filter(
+            product_id=self.kwargs["product_id"]
+        ).exclude(review="").select_related("user")
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+
+        stats = queryset.aggregate(
+            average_rating=Avg("rating"),
+            rating_count=Count("id")
+        )
+
+        serializer = self.get_serializer(queryset, many=True)
+
+        return Response({
+            "average_rating": round(stats["average_rating"] or 0, 1),
+            "rating_count": stats["rating_count"],
+            "results": serializer.data
+        })
 
 

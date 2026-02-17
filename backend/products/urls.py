@@ -10,7 +10,11 @@ from .views import (
     ProductVariantImageListCreateAPIView,
     ProductVariantImageRetrieveUpdateDestroyAPIView,
     CustomerBannerListAPIView,
-    BulkProductVariantCreateAPIView
+    BulkProductVariantCreateAPIView,
+    CreateProductRatingAPIView,
+    MyProductRatingAPIView,
+    ProductRatingListAPIView,
+    
 
 )
 from django.urls import path
@@ -36,5 +40,14 @@ urlpatterns = [
     path("banner/active/", CustomerBannerListAPIView.as_view(), name="customer-banner-list"),
 
     # Admin
+    path("products/<int:product_id>/ratings/", CreateProductRatingAPIView.as_view(), name="create-product-rating"),
+
+    # Get / Update / Delete my rating
+    path("products/<int:product_id>/ratings/me/", MyProductRatingAPIView.as_view(), name="my-product-rating"),
+
+
+    # Public reviews list
+    path("products/<int:product_id>/reviews/", ProductRatingListAPIView.as_view(), name="product-review-list"),
     
+
 ]

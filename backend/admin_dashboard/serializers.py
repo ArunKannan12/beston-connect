@@ -12,7 +12,7 @@ from django.db import transaction
 from orders.serializers import ShippingAddressSerializer
 import random
 import string
-from .models import AdminLog
+from .models import AdminLog,ContactMessage
 from products.serializers import ProductVariantImageSerializer
 import logging
 logger = logging.getLogger('admin_dashboard')
@@ -538,7 +538,7 @@ class AdminOrderSerializer(serializers.ModelSerializer):
         fields = ['id','order_number','user','shipping_address','status','subtotal',
                   'delivery_charge','total_commission','total','payment_method','is_paid',
                   'paid_at','razorpay_order_id','razorpay_payment_id','has_refund',
-                  'refund_status','promoter','cancel_reason','cancelled_at','cancelled_by','cancelled_by_role','is_restocked','courier','waybill','tracking_url','label_url','label_generated_at','shipped_at','handoff_timestamp','delivered_at','checkout_session_id','items','created_at','updated_at',
+                  'refund_status','cancel_reason','cancelled_at','cancelled_by','cancelled_by_role','is_restocked','courier','waybill','tracking_url','label_url','label_generated_at','shipped_at','handoff_timestamp','delivered_at','checkout_session_id','items','created_at','updated_at',
         ]
         read_only_fields = fields
 
@@ -657,3 +657,26 @@ class OrderPackingSerializer(serializers.ModelSerializer):
 
         return products
 
+
+
+class ContactMessageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ContactMessage
+        fields = [
+            "id",
+            "user",
+            "name",
+            "email",
+            "subject",
+            "message",
+            "is_resolved",
+            "created_at",
+            "responded_at",
+        ]
+        read_only_fields = ["is_resolved", "created_at", "responded_at", "user"]
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        if request and hasattr(request, "user") and request.user.is_authenticated:
+            validated_data["user"] = request.user
+        return super().create(validated_data)

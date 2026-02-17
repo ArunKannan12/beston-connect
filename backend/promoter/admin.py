@@ -1,7 +1,7 @@
 from django.contrib import admin
 from .models import (
     Promoter, PromoterCommission, WithdrawalRequest, 
-    CommissionLevel, PromotedProduct, PremiumSettings, PromoterPayment
+    CommissionLevel, PromotedProduct, PremiumSettings, PromoterPayment,Subscription
 )
 
 # -----------------------------
@@ -11,44 +11,40 @@ from .models import (
 class PromoterAdmin(admin.ModelAdmin):
     list_display = (
         'id', 'user', 'phone_number', 'referral_code',
-        'promoter_type', 'total_sales_count',
+        'promoter_type', 'sales_count',
         'total_commission_earned', 'wallet_balance',
-        'is_eligible_for_withdrawal', 'submitted_at', 
+        'is_eligible_for_withdrawal', 'submitted_at',
     )
-    list_filter = ('promoter_type', 'is_eligible_for_withdrawal')
+    list_filter = ('promoter_type', 'is_approved', 'kyc_status')
     search_fields = (
         'user__username', 'user__email', 'phone_number',
         'bank_account_number', 'account_holder_name', 'referral_code'
     )
     readonly_fields = (
-        'referral_code', 'submitted_at', 
-        'is_eligible_for_withdrawal'
+        'referral_code', 'submitted_at', 'is_eligible_for_withdrawal'
     )
     ordering = ('-submitted_at',)
     list_per_page = 25
 
     fieldsets = (
         ('User Information', {
-            'fields': ('user', 'phone_number', 'promoter_type', 'referred_by')
+            'fields': ('user', 'phone_number', 'promoter_type')
         }),
-        ('Referral Info', {
-            'fields': ('referral_code',)
-        }),
-        ('Bank Details', {
-            'fields': ('bank_account_number', 'ifsc_code', 'bank_name', 'account_holder_name')
-        }),
-        ('Application Status', {
-            'fields': ('submitted_at', )
-        }),
+        ('Referral Info', {'fields': ('referral_code',)}),
+        ('Application Status', {'fields': ('is_approved', 'kyc_status', 'submitted_at')}),
         ('Performance & Wallet', {
-            'fields': ('total_sales_count', 'total_commission_earned', 'wallet_balance', 'is_eligible_for_withdrawal')
+            'fields': ('total_commission_earned', 'wallet_balance', 'is_eligible_for_withdrawal')
         }),
     )
 
     def get_queryset(self, request):
-        return super().get_queryset(request).select_related('user', 'referred_by')
+        return super().get_queryset(request).select_related('user')
 
+    def sales_count(self, obj):
+        return obj.sales.count() if hasattr(obj, 'sales') else 0
+    sales_count.short_description = "Sales Count"
 
+admin.site.register(Subscription)
 # -----------------------------
 # Promoter Commission Admin
 # -----------------------------
@@ -119,9 +115,9 @@ class PromotedProductAdmin(admin.ModelAdmin):
 # -----------------------------
 @admin.register(PremiumSettings)
 class PremiumSettingsAdmin(admin.ModelAdmin):
-    list_display = ('id', 'amount', 'active', 'updated_at')
-    list_filter = ('active',)
-    ordering = ('-updated_at',)
+    list_display = ('id', 'monthly_amount', 'annual_amount', 'offer_active', 'offer_start', 'offer_end')
+    list_filter = ('offer_active',)
+    ordering = ('-id',)
 
 
 # -----------------------------
@@ -129,9 +125,9 @@ class PremiumSettingsAdmin(admin.ModelAdmin):
 # -----------------------------
 @admin.register(PromoterPayment)
 class PromoterPaymentAdmin(admin.ModelAdmin):
-    list_display = ('id', 'promoter', 'premium_amount', 'payment_id', 'status', 'created_at', 'verified_at')
-    list_filter = ('status', 'created_at', 'verified_at')
-    search_fields = ('promoter__user__username', 'promoter__user__email', 'payment_id')
-    readonly_fields = ('created_at', 'verified_at')
+    list_display = ('id', 'promoter', 'amount', 'razorpay_payment_id', 'status', 'created_at')
+    list_filter = ('status', 'created_at')
+    search_fields = ('promoter__user__username', 'promoter__user__email', 'razorpay_payment_id')
+    readonly_fields = ('created_at',)
     autocomplete_fields = ('promoter',)
     ordering = ('-created_at',)

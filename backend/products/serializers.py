@@ -4,7 +4,15 @@ from django.conf import settings
 from django.utils import timezone
 from datetime import timedelta
 from django.db.models import Q
-from .models import Category, Product, ProductVariant, ProductVariantImage, Banner
+from .models import (
+                Category, 
+                Product, 
+                ProductVariant, 
+                ProductVariantImage, 
+                Banner,
+                ProductRating,
+                
+                )
 
 # Configurable thresholds
 LOW_STOCK_THRESHOLD = getattr(settings, "LOW_STOCK_THRESHOLD", 5)
@@ -113,7 +121,7 @@ class ProductVariantSerializer(serializers.ModelSerializer):
             'id', 'variant_name', 'description', 'sku', 'base_price', 'featured',
             'offer_price', 'final_price', 'discount_percent', 'stock',
             'is_low_stock', 'is_active', 'images', 'primary_image_url', 'weight', 'promoter_commission_rate',
-            'product_id', 'product_name', 'product_slug', 'product_category', 'product_created_at', 'is_new',
+            'product_id', 'product_name', 'product_slug', 'product_category', 'product_created_at', 'is_new','average_rating','rating_count',
             'allow_return', 'return_days', 'allow_replacement', 'replacement_days', 'is_returnable', 'is_replaceable',
         ]
         extra_kwargs = {
@@ -307,3 +315,18 @@ class BannerSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
+class ProductRatingCreateUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductRating
+        fields = ["rating", "review"]
+
+class ProductRatingListSerializer(serializers.ModelSerializer):
+    user_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProductRating
+        fields = ["id", "rating", "review", "created_at", "user_name"]
+
+    def get_user_name(self, obj):
+        name = obj.user.get_full_name()
+        return name if name else obj.user.first_name

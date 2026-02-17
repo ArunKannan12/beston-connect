@@ -1,0 +1,33 @@
+C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\razorpay\client.py:4: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources
+Traceback (most recent call last):
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\models\query.py", line 946, in get_or_create
+    return self.get(**kwargs), False
+           ~~~~~~~~^^^^^^^^^^
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\models\query.py", line 633, in get
+    raise self.model.DoesNotExist(
+        "%s matching query does not exist." % self.model._meta.object_name
+    )
+products.models.ProductVariant.DoesNotExist: ProductVariant matching query does not exist.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\backend\test_commission_standalone.py", line 31, in <module>
+    variant, _ = ProductVariant.objects.get_or_create(product=product, variant_name='Standard', defaults={'base_price': 1000, 'promoter_commission_rate': 10})
+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\models\manager.py", line 87, in manager_method
+    return getattr(self.get_queryset(), name)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\models\query.py", line 953, in get_or_create
+    return self.create(**params), True
+           ~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\models\query.py", line 663, in create
+    obj.save(force_insert=True, using=self.db)
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\backend\products\models.py", line 122, in save
+    self.full_clean()
+    ~~~~~~~~~~~~~~~^^
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\models\base.py", line 1679, in full_clean
+    raise ValidationError(errors)
+django.core.exceptions.ValidationError: {'sku': ['This field cannot be blank.']}

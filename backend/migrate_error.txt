@@ -1,0 +1,86 @@
+C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\razorpay\client.py:4: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources
+\u274c Error in auto tracking loop: column orders_orderitem.is_commission_applied does not exist
+LINE 1: ...sion_amount", "orders_orderitem"."referral_code", "orders_or...
+                                                             ^
+Traceback (most recent call last):
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+psycopg2.errors.UndefinedColumn: column orders_orderitem.is_commission_applied does not exist
+LINE 1: ...sion_amount", "orders_orderitem"."referral_code", "orders_or...
+                                                             ^
+
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\backend\orders\tasks.py", line 29, in auto_update_tracking
+    for order in active_orders:
+                 ^^^^^^^^^^^^^
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\models\query.py", line 384, in __iter__
+    self._fetch_all()
+    ~~~~~~~~~~~~~~~^^
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\models\query.py", line 1951, in _fetch_all
+    self._prefetch_related_objects()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\models\query.py", line 1328, in _prefetch_related_objects
+    prefetch_related_objects(self._result_cache, *self._prefetch_related_lookups)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\models\query.py", line 2397, in prefetch_related_objects
+    obj_list, additional_lookups = prefetch_one_level(
+                                   ~~~~~~~~~~~~~~~~~~^
+        obj_to_fetch,
+        ^^^^^^^^^^^^^
+    ...<2 lines>...
+        level,
+        ^^^^^^
+    )
+    ^
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\models\query.py", line 2561, in prefetch_one_level
+    ) = prefetcher.get_prefetch_querysets(
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        instances, lookup.get_current_querysets(level)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\models\fields\related_descriptors.py", line 800, in get_prefetch_querysets
+    for rel_obj in queryset:
+                   ^^^^^^^^
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\models\query.py", line 384, in __iter__
+    self._fetch_all()
+    ~~~~~~~~~~~~~~~^^
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\models\query.py", line 1949, in _fetch_all
+    self._result_cache = list(self._iterable_class(self))
+                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\models\query.py", line 91, in __iter__
+    results = compiler.execute_sql(
+        chunked_fetch=self.chunked_fetch, chunk_size=self.chunk_size
+    )
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\models\sql\compiler.py", line 1623, in execute_sql
+    cursor.execute(sql, params)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\backends\utils.py", line 122, in execute
+    return super().execute(sql, params)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\backends\utils.py", line 79, in execute
+    return self._execute_with_wrappers(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        sql, params, many=False, executor=self._execute
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\backends\utils.py", line 92, in _execute_with_wrappers
+    return executor(sql, params, many, context)
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\backends\utils.py", line 100, in _execute
+    with self.db.wrap_database_errors:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\utils.py", line 91, in __exit__
+    raise dj_exc_value.with_traceback(traceback) from exc_value
+  File "C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\django\db\backends\utils.py", line 105, in _execute
+    return self.cursor.execute(sql, params)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+django.db.utils.ProgrammingError: column orders_orderitem.is_commission_applied does not exist
+LINE 1: ...sion_amount", "orders_orderitem"."referral_code", "orders_or...
+                                                             ^
+

@@ -1,0 +1,8 @@
+53 objects imported automatically (use -v 2 for details).
+
+Ctrl click to launch VS Code Native REPL
+>>> >>> >>> >>> >>> >>> >>> >>> >>> >>> >>> [DEBUG] save called. roles_list synced: [], active_role=promoter
+>>> >>> >>> >>> ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... ... >>> >>> >>> >>> >>> >>> >>> >>> >>> >>> >>> >>> >>> >>> --- Testing Active Subscription Restriction ---
+Response Status (Active): 400
+Response Data (Active): {'detail': 'Your current subscription is still active until 2026-01-02 14:45. You can only renew after it expires.'}
+>>> 

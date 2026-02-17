@@ -254,16 +254,6 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     def get_cancelable(self, obj):
         return obj.status in ["pending", "processing"]
 
-    def get_items(self, obj):
-        result = []
-
-        # Preload return & replacement requests for efficient lookup
-        return_requests = {
-            rr.order_item_id: rr for rr in obj.return_requests.all()
-        }
-        replacement_requests = {
-            rr.order_item_id: rr for rr in obj.replacement_requests.all()
-        }
 
     def get_items(self, obj):
         result = []
@@ -283,11 +273,11 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             # 🕒 Calculate remaining days for return/replacement
             if delivered_at:
                 now = timezone.now()
-                if variant.allow_return and variant.return_days:
+                if variant.allow_return and (variant.return_days or 0) > 0:
                     end_date = delivered_at + timedelta(days=variant.return_days)
                     return_remaining_days = max((end_date - now).days, 0)
 
-                if variant.allow_replacement and variant.replacement_days:
+                if variant.allow_replacement and (variant.replacement_days or 0) > 0:
                     end_date = delivered_at + timedelta(days=variant.replacement_days)
                     replacement_remaining_days = max((end_date - now).days, 0)
 

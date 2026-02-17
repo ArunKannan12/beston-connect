@@ -1,12 +1,14 @@
-from rest_framework.generics import CreateAPIView, RetrieveUpdateDestroyAPIView, ListCreateAPIView,RetrieveAPIView,ListAPIView
+from rest_framework.generics import CreateAPIView, RetrieveUpdateDestroyAPIView, ListCreateAPIView,RetrieveAPIView,ListAPIView,RetrieveUpdateAPIView
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
+from django.db import IntegrityError
 from rest_framework import status
 from products.serializers import ProductVariantSerializer
 from django.utils import timezone
 from django.db.models import Count
+from dateutil.relativedelta import relativedelta
 from django.conf import settings
 from django.db import transaction
 import razorpay
@@ -25,7 +27,11 @@ from .models import (
                      WithdrawalRequest, 
                      PromotedProduct, 
                      PremiumSettings,
-                     CommissionLevel
+                     CommissionLevel,
+                     PromoterReferral,
+                     PromoterBankAccount,
+                     Subscription,
+                     PromoterPayment
                      )
 from .serializers import (
                     PromoterSerializer, 
@@ -35,7 +41,8 @@ from .serializers import (
                     PromotedProductSerializer,
                     PromoterLightSerializer,
                     WithdrawalRequestAdminSerializer,
-                    WithdrawalRequestPromoterSerializer
+                    WithdrawalRequestPromoterSerializer,
+                    PromoterBankAccountSerializer
                     )
 from products.models import ProductVariant
 from accounts.permissions import IsPromoter, IsAdminOrPromoter, IsAdmin
@@ -48,7 +55,7 @@ class PromoterListAPIView(ListAPIView):
     filter_backends = [
         DjangoFilterBackend,
         filters.SearchFilter,
-        filters.OrderingFilter
+        filters.OrderingFilter,
     ]
 
     search_fields = [
@@ -56,34 +63,36 @@ class PromoterListAPIView(ListAPIView):
         "user__phone_number",
         "referral_code",
         "promoter_type",
-        "bank_name",
-        "account_holder_name",
+        "bank_account__bank_name",
+        "bank_account__account_holder_name",
     ]
 
     filterset_fields = [
         "promoter_type",
-        "is_eligible_for_withdrawal",
+        "kyc_status",
+        "is_approved",
     ]
 
     ordering_fields = [
         "submitted_at",
-        'promoter_type',
+        "approved_at",
+        "promoter_type",
         "total_sales_count",
         "total_commission_earned",
-        "wallet_balance"
+        "wallet_balance",
     ]
 
-    
-    ordering = ["-submitted_at"]  # default order
+    ordering = ["-submitted_at"]
 
     def get_queryset(self):
         return (
             Promoter.objects
-            .select_related("user")
+            .select_related("user", "bank_account")
             .prefetch_related("promoted_products")
         )
 
-    
+
+
 class BecomePromoterAPIView(CreateAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = PromoterSerializer
@@ -91,12 +100,28 @@ class BecomePromoterAPIView(CreateAPIView):
     def create(self, request, *args, **kwargs):
         user = request.user
 
-        # 1️⃣ Check if user is already a promoter
-        if hasattr(user, 'promoter'):
-            serializer = PromoterSerializer(user.promoter, context={'request': request})
+        # 1️⃣ Resolve referral code from body / query / session
+        ref_code = (
+            request.data.get("referral_code")
+            or request.query_params.get("ref")
+            or request.session.get("referral_code")
+        )
+        request.session.pop("referral_code", None)  # clear after reading
+
+        referred_by = None
+        if ref_code:
+            referrer = Promoter.objects.filter(referral_code=ref_code).first()
+            if referrer:
+                referred_by = referrer
+
+        # 2️⃣ Check if unpaid promoter already exists
+        promoter = Promoter.objects.filter(user=user, promoter_type="unpaid").first()
+        if promoter:
+            message = "Your promoter account is pending admin approval."
+            serializer = self.get_serializer(promoter)
             return Response(
                 {
-                    "detail": "You are already a promoter",
+                    "detail": message,
                     "promoter_profile": serializer.data,
                     "active_role": user.active_role,
                     "roles": list(user.user_roles.values_list("role__name", flat=True)),
@@ -104,43 +129,75 @@ class BecomePromoterAPIView(CreateAPIView):
                 status=status.HTTP_200_OK,
             )
 
-        # 2️⃣ Handle referral code
-        ref_code = (
-            request.data.get('referral_code') or
-            request.query_params.get('ref') or
-            request.session.get('referral_code')
-        )
-        referred_by = None
-        if ref_code:
-            referred_by = Promoter.objects.filter(referral_code=ref_code).first()
-
-        # Clear session referral if used
-        request.session.pop('referral_code', None)
-
-        # 3️⃣ Create Promoter instance first
+        # 3️⃣ Create new unpaid promoter
         promoter = Promoter.objects.create(
             user=user,
-            referred_by=referred_by,
-            promoter_type='unpaid',  # free promoter by default
+            promoter_type="unpaid",
+            is_approved=False
         )
 
-        # 4️⃣ Serialize and save additional data (bank, account, etc.)
-        serializer = self.get_serializer(promoter, data=request.data, partial=True)
+        # 4️⃣ Create referral record if applicable
+        if referred_by:
+            PromoterReferral.objects.get_or_create(
+                referred_promoter=promoter,
+                referrer_promoter=referred_by,
+                referral_code=promoter.referral_code
+            )
+
+        # 5️⃣ Update other promoter fields if needed
+        serializer = self.get_serializer(
+            promoter,
+            data=request.data,
+            partial=True,
+            context={"request": request},
+        )
         serializer.is_valid(raise_exception=True)
         serializer.save(user=user)
 
-        # 5️⃣ Assign roles
-        user.assign_role("promoter", set_active=True, referred_by=referred_by)
-        user.assign_role("customer")  # keep customer role but not active
+        # 6️⃣ Assign customer role (do NOT assign promoter yet)
+        user.assign_role("customer")  # always keep customer role
 
         return Response(
             {
-                "detail": "Promoter account created successfully",
+                "detail": "Promoter account created successfully and pending admin approval.",
                 "promoter_profile": serializer.data,
                 "active_role": user.active_role,
                 "roles": list(user.user_roles.values_list("role__name", flat=True)),
             },
             status=status.HTTP_201_CREATED,
+        )
+
+class ApprovePromoterAPIView(APIView):
+    permission_classes = [IsAdmin]
+
+    def post(self, request, promoter_id):
+        """
+        Admin approves a promoter account.
+        """
+        try:
+            promoter = Promoter.objects.get(id=promoter_id)
+        except Promoter.DoesNotExist:
+            return Response({"detail": "Promoter not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if promoter.is_approved:
+            return Response({"detail": "Promoter is already approved."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Approve promoter
+        promoter.is_approved = True
+        promoter.approved_at = timezone.now()
+        promoter.save(update_fields=["is_approved", "approved_at"])
+
+        # Assign promoter role to user
+        promoter.user.assign_role("promoter", set_active=True)
+        promoter.user.assign_role("customer")
+        return Response(
+            {
+                "detail": "Promoter approved and role assigned.",
+                "promoter_id": promoter.id,
+                "user_id": promoter.user.id,
+                "roles": list(promoter.user.user_roles.values_list("role__name", flat=True)),
+            },
+            status=status.HTTP_200_OK,
         )
 
 
@@ -159,19 +216,21 @@ class PromoterRetrieveUpdateDestroyAPIView(RetrieveUpdateDestroyAPIView):
     def perform_update(self, serializer):
         user = self.request.user
 
-        # Admin can update all fields
-        if user.is_staff or getattr(user, "role", None) == 'admin':
+        if user.is_staff or getattr(user, "role", None) == "admin":
             serializer.save()
             return
 
-        # Non-admins: only update allowed fields
-        allowed_fields = ['bank_account_number', 'ifsc_code', 'bank_name', 'account_holder_name', 'phone_number']
-        validated_data = {k: v for k, v in serializer.validated_data.items() if k in allowed_fields}
+        phone = self.request.data.get("phone_number")
+        if not phone:
+            raise PermissionDenied("Promoters can only update their phone number.")
 
-        if not validated_data:
-            raise PermissionDenied("You are not allowed to update these fields.")
-
-        serializer.save(**validated_data)
+        # Sync phone number to both User and Promoter
+        user.phone_number = phone
+        try:
+            user.save(update_fields=["phone_number"])
+        except IntegrityError:
+            raise ValidationError({"phone_number": "This phone number is already in use."})
+        serializer.save(phone_number=phone)
 
     def perform_destroy(self, instance):
         user = self.request.user
@@ -216,8 +275,25 @@ class WithdrawalRequestListCreateAPIView(ListCreateAPIView):
         from decimal import Decimal
         amount = Decimal(amount)
 
+        # ✅ Only paid promoters can withdraw
         if promoter.promoter_type != 'paid':
             raise ValidationError("Only paid promoters can request withdrawals.")
+
+        # ✅ Ensure promoter is approved (extra safeguard)
+        if not promoter.is_approved:
+            raise ValidationError("Your promoter account is not yet approved by admin.")
+
+        # ✅ Ensure bank account exists
+        try:
+            bank_account = promoter.bank_account  # OneToOne relation
+        except PromoterBankAccount.DoesNotExist:
+            raise ValidationError("Bank details must be provided before requesting a withdrawal.")
+
+        # ✅ Ensure bank details are complete
+        if not all([bank_account.account_number, bank_account.ifsc_code, bank_account.bank_name, bank_account.account_holder_name]):
+            raise ValidationError("Bank details must be complete before requesting a withdrawal.")
+
+        # ✅ Eligibility and amount checks
         if not promoter.is_eligible_for_withdrawal:
             raise ValidationError('You are not eligible for withdrawal yet.')
         if amount <= 0:
@@ -229,7 +305,32 @@ class WithdrawalRequestListCreateAPIView(ListCreateAPIView):
         if WithdrawalRequest.objects.filter(promoter=promoter, status='pending').exists():
             raise ValidationError('You already have a pending withdrawal request. Please wait until it is reviewed.')
 
+        # ✅ Save withdrawal request
         serializer.save(promoter=promoter)
+
+class PromoterBankAccountListCreateAPIView(ListCreateAPIView):
+    serializer_class = PromoterBankAccountSerializer
+    permission_classes = [IsPromoter]
+
+    def get_queryset(self):
+        return PromoterBankAccount.objects.filter(promoter=self.request.user.promoter)
+
+    def perform_create(self, serializer):
+        # OneToOneField ensures only one account; still good to validate
+        if hasattr(self.request.user.promoter, "bank_account"):
+            raise ValidationError("Bank account already exists.")
+        serializer.save(promoter=self.request.user.promoter)
+
+class PromoterBankAccountRetrieveUpdateDestroyAPIView(RetrieveUpdateDestroyAPIView):
+    serializer_class = PromoterBankAccountSerializer
+    permission_classes = [IsPromoter]
+
+    def get_object(self):
+        promoter = self.request.user.promoter
+        try:
+            return promoter.bank_account
+        except PromoterBankAccount.DoesNotExist:
+            raise NotFound("Bank account not added yet")
 
 
 class CancelWithdrawalRequestAPIView(APIView):
@@ -297,7 +398,12 @@ class WithdrawalApproveAPIView(APIView):
     def post(self, request, pk):
         withdrawal = get_object_or_404(WithdrawalRequest, pk=pk)
         note = request.data.get("admin_note", "")
-        withdrawal.approve(note=note)
+
+        try:
+            withdrawal.approve(note=note)
+        except ValidationError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
         return Response({"status": withdrawal.status}, status=status.HTTP_200_OK)
 
 
@@ -339,53 +445,51 @@ class WithdrawalFailAPIView(APIView):
         note = request.data.get("admin_note", "")
         withdrawal.mark_failed(note=note)
         return Response({"status": withdrawal.status}, status=status.HTTP_200_OK)
+    
 
-# --- Premium Upgrade ---
 class BecomePremiumPromoterAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
         user = request.user
+        promoter = getattr(user, 'promoter', None)
 
-        promoter = Promoter.objects.filter(user=user).first()
         if promoter and promoter.promoter_type == "paid":
             return Response(
                 {"detail": "You are already a premium promoter."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        
-        # Get the latest active premium settings
-        premium = PremiumSettings.objects.filter(active=True).order_by('-updated_at').first()
+        premium = PremiumSettings.objects.order_by('-id').first()
         if not premium:
-            return Response(
-                {"detail": "Premium amount not set by admin."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"detail": "Premium amount not set by admin."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Use current_amount which accounts for active offers
-        amount_to_charge = premium.current_amount
+        plan_type = request.data.get("plan_type", "monthly")
+        if plan_type not in ["monthly", "annual"]:
+            return Response({"detail": "Invalid plan type"}, status=400)
 
+        amount_to_charge = premium.current_amount(plan_type=plan_type)
+
+        # Razorpay order creation
         client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
-        payment_amount_paise = int(amount_to_charge * 100)  # convert to paise
-
-        order_data = {
+        payment_amount_paise = int(amount_to_charge * 100)
+        razorpay_order = client.order.create({
             "amount": payment_amount_paise,
             "currency": "INR",
             "receipt": f"premium_promoter_{user.id}_{timezone.now().timestamp()}",
             "payment_capture": 1
-        }
-
-        razorpay_order = client.order.create(data=order_data)
+        })
 
         return Response({
             "razorpay_order_id": razorpay_order["id"],
-            "amount": amount_to_charge,
+            "amount": str(amount_to_charge),
             "currency": "INR",
+            "plan_type": plan_type,
             "promoter_exists": promoter is not None
         }, status=status.HTTP_200_OK)
-    
- 
+
+from datetime import timedelta
+
 class VerifyPremiumPaymentAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -393,62 +497,227 @@ class VerifyPremiumPaymentAPIView(APIView):
         user = request.user
         data = request.data
 
-        required_fields = ["razorpay_payment_id", "razorpay_order_id", "razorpay_signature"]
+        # Validate required fields
+        required_fields = ["razorpay_payment_id", "razorpay_order_id", "razorpay_signature", "plan_type"]
         if not all(field in data for field in required_fields):
-            return Response({"detail": "Incomplete payment data"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "Incomplete payment data"}, status=400)
+
+        plan_type = data["plan_type"]
+        if plan_type not in ["monthly", "annual"]:
+            return Response({"detail": "Invalid plan type"}, status=400)
 
         # Verify Razorpay signature
         client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
         try:
             client.utility.verify_payment_signature({
-                'razorpay_order_id': data["razorpay_order_id"],
-                'razorpay_payment_id': data["razorpay_payment_id"],
-                'razorpay_signature': data["razorpay_signature"]
+                "razorpay_order_id": data["razorpay_order_id"],
+                "razorpay_payment_id": data["razorpay_payment_id"],
+                "razorpay_signature": data["razorpay_signature"],
             })
         except razorpay.errors.SignatureVerificationError:
-            return Response({"detail": "Payment verification failed"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "Payment verification failed"}, status=400)
 
-        # Referral handling
-        ref_code = data.get('referral_code') or request.query_params.get('ref') or request.session.get('referral_code')
-        referred_by = Promoter.objects.filter(referral_code=ref_code).first() if ref_code else None
-        request.session.pop('referral_code', None)
+        premium = PremiumSettings.objects.order_by('-id').first()
+        if not premium:
+            return Response({"detail": "Premium settings not found"}, status=400)
 
-        promoter, created = Promoter.objects.get_or_create(user=user, defaults={
-            'promoter_type': 'paid',
-            'premium_activated_at': timezone.now(),
-            'referred_by': referred_by
+        amount = premium.current_amount(plan_type)
+
+        with transaction.atomic():
+            promoter, _ = Promoter.objects.get_or_create(user=user)
+            promoter.promoter_type = "paid"
+            promoter.premium_activated_at = timezone.now()
+            promoter.is_approved = True
+            promoter.approved_at = timezone.now()
+            promoter.save(update_fields=["promoter_type", "premium_activated_at", "is_approved",'approved_at'])
+
+            # Expire old subscriptions
+            Subscription.objects.filter(promoter=promoter, status="active").update(status="expired")
+
+            expires_at = Subscription.calculate_expiry(plan_type)
+
+            # Prevent duplicate payment records
+            if not PromoterPayment.objects.filter(razorpay_payment_id=data["razorpay_payment_id"]).exists():
+                Subscription.objects.create(
+                    promoter=promoter,
+                    plan_type=plan_type,
+                    premium_settings=premium,
+                    amount=amount,
+                    plan_price=amount,
+                    started_at=timezone.now(),   # ✅ ADD THIS
+                    expires_at=expires_at,
+                    razorpay_payment_id=data["razorpay_payment_id"],
+                    razorpay_order_id=data["razorpay_order_id"],
+                    status="active"
+                )
+
+                PromoterPayment.objects.create(
+                    promoter=promoter,
+                    amount=amount,
+                    razorpay_payment_id=data["razorpay_payment_id"],
+                    status="success",
+                )
+
+            user.assign_role("promoter", set_active=True)
+            user.assign_role("customer")
+
+        return Response({"detail": "Premium subscription activated"}, status=200)
+
+class ManageSubscriptionAPIView(APIView):
+    permission_classes=[IsPromoter]
+    def post(self,request):
+        user=request.user
+        promoter=getattr(user,'promoter',None)
+
+        if not promoter or promoter.promoter_type != 'paid':
+            return Response(
+                {'detail':'You are not a paid promoter'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        active_sub = Subscription.objects.filter(promoter=promoter, status='active').first()
+        if active_sub and active_sub.expires_at > timezone.now():
+            return Response(
+                {'detail': f'Your current subscription is still active until {active_sub.expires_at.strftime("%Y-%m-%d %H:%M")}. You can only renew after it expires.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        
+        plan_type = request.data.get("plan_type", "monthly")
+        if plan_type not in ["monthly", "annual"]:
+            return Response({"detail": "Invalid plan type"}, status=400)
+        
+        premium = PremiumSettings.objects.order_by("-id").first()
+        if not premium:
+            return Response({"detail": "Premium amount not set"}, status=400)
+
+        amount_to_charge = premium.current_amount(plan_type=plan_type)
+
+        # Create Razorpay order
+        client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
+        payment_amount_paise = int(amount_to_charge * 100)
+        razorpay_order = client.order.create({
+            "amount": payment_amount_paise,
+            "currency": "INR",
+            "receipt": f"premium_renewal_{user.id}_{timezone.now().timestamp()}",
+            "payment_capture": 1
         })
 
-        # Update existing or new promoter with bank/account details
-        promoter.promoter_type = 'paid'
-        promoter.premium_activated_at = timezone.now()
-        promoter.referred_by = referred_by
-        promoter.bank_account_number = data.get('bank_account_number', promoter.bank_account_number)
-        promoter.ifsc_code = data.get('ifsc_code', promoter.ifsc_code)
-        promoter.bank_name = data.get('bank_name', promoter.bank_name)
-        promoter.account_holder_name = data.get('account_holder_name', promoter.account_holder_name)
-        promoter.save()
-
-        # Assign roles
-        user.assign_role("promoter", set_active=True, referred_by=referred_by)
-        user.assign_role("customer")
-
-        return Response({"detail": "Promoter upgraded to premium!"}, status=status.HTTP_200_OK)
-
-class PremiumSettingsCreateAPIView(CreateAPIView):
-    queryset = PremiumSettings.objects.all()
-    serializer_class = PremiumSettingSerializer
-    permission_classes = [IsAdmin]
-
-    def create(self, request, *args, **kwargs):
-        if PremiumSettings.objects.exists():
-            return Response({'detail':'Only one premium settings record is allowed'},status=status.HTTP_400_BAD_REQUEST)
-        return super().create(request, *args, **kwargs)
+        return Response({
+            "razorpay_order_id": razorpay_order["id"],
+            "amount": str(amount_to_charge),
+            "currency": "INR",
+            "plan_type": plan_type,
+        }, status=status.HTTP_200_OK)
     
-class PremiumSettingsRetrieveUpdateDestroyAPIView(RetrieveUpdateDestroyAPIView):
-    queryset = PremiumSettings.objects.all()
+class VerifySubscriptionPaymentAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        data = request.data
+
+        required_fields = [
+            "razorpay_payment_id",
+            "razorpay_order_id",
+            "razorpay_signature",
+            "plan_type",
+        ]
+
+        if not all(field in data for field in required_fields):
+            return Response({"detail": "Incomplete payment data"}, status=400)
+
+        plan_type = data["plan_type"]
+        if plan_type not in ["monthly", "annual"]:
+            return Response({"detail": "Invalid plan type"}, status=400)
+
+        client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
+
+        # 1️⃣ Verify signature
+        try:
+            client.utility.verify_payment_signature({
+                "razorpay_order_id": data["razorpay_order_id"],
+                "razorpay_payment_id": data["razorpay_payment_id"],
+                "razorpay_signature": data["razorpay_signature"],
+            })
+        except razorpay.errors.SignatureVerificationError:
+            return Response({"detail": "Payment verification failed"}, status=400)
+
+        premium = PremiumSettings.objects.order_by("-id").first()
+        amount = premium.current_amount(plan_type)
+
+        # 2️⃣ Validate order amount
+        order = client.order.fetch(data["razorpay_order_id"])
+        if order["amount"] != int(amount * 100):
+            return Response({"detail": "Amount mismatch"}, status=400)
+
+        promoter = user.promoter
+
+        # 3️⃣ Prevent duplicate payment
+        if Subscription.objects.filter(
+            razorpay_payment_id=data["razorpay_payment_id"]
+        ).exists():
+            return Response({"detail": "Payment already processed"}, status=200)
+
+        with transaction.atomic():
+            current_sub = Subscription.objects.filter(
+                promoter=promoter,
+                status="active"
+            ).first()
+
+            if current_sub and current_sub.expires_at > timezone.now():
+                # Anytime renewal → EXTEND
+                if plan_type == "monthly":
+                    current_sub.expires_at += relativedelta(months=1)
+                else:
+                    current_sub.expires_at += relativedelta(years=1)
+
+                current_sub.amount += amount
+                current_sub.plan_type = plan_type  # optional
+                current_sub.save()
+
+            else:
+                # Expired or first-time purchase
+                expires_at = (
+                    timezone.now() + relativedelta(months=1)
+                    if plan_type == "monthly"
+                    else timezone.now() + relativedelta(years=1)
+                )
+
+                Subscription.objects.create(
+                    promoter=promoter,
+                    plan_type=plan_type,
+                    amount=amount,
+                    started_at=timezone.now(),
+                    expires_at=expires_at,
+                    razorpay_payment_id=data["razorpay_payment_id"],
+                    razorpay_order_id=data["razorpay_order_id"],
+                    status="active"
+                )
+
+            PromoterPayment.objects.create(
+                promoter=promoter,
+                amount=amount,
+                razorpay_payment_id=data["razorpay_payment_id"],
+                status="success",
+            )
+
+        return Response({"detail": "Subscription renewed successfully"}, status=200)
+
+class PremiumSettingsAPIView(RetrieveUpdateAPIView):
     serializer_class = PremiumSettingSerializer
     permission_classes = [IsAdmin]
+
+    def get_object(self):
+        # creates the row if it doesn't exist yet
+        obj, _ = PremiumSettings.objects.get_or_create(
+            singleton=True,
+            defaults={
+                "monthly_amount": 199,  # default value
+                "annual_amount": 1999,  # default value
+            }
+        )
+        return obj
 
 class CommissionLevelListCreateAPIView(ListCreateAPIView):
     queryset = CommissionLevel.objects.all()
@@ -502,43 +771,61 @@ class PromoterProductsAPIView(APIView):
             data["invalid_ids"] = invalid_ids
 
         return Response(data, status=status.HTTP_201_CREATED)
-
+    
 class PremiumAmountAPIView(APIView):
     def get(self, request):
-        premium = PremiumSettings.objects.filter(active=True).order_by('-updated_at').first()
+        premium = PremiumSettings.objects.first()
 
         if not premium:
-            # Return safe empty response so frontend works
             return Response({
                 "id": None,
-                "amount": None,
-                "original_amount": None,
+                "monthly_amount": None,
+                "annual_amount": None,
                 "offer_active": False,
                 "offer_valid_now": False,
-                "offer_amount": None,
+                "offer_monthly_amount": None,
+                "offer_annual_amount": None,
+                "current_monthly_amount": None,
+                "current_annual_amount": None,
+                "annual_savings": None,
                 "offer_start": None,
                 "offer_end": None,
             }, status=status.HTTP_200_OK)
 
-        now = timezone.now()
-        offer_valid_now = (
-            premium.offer_active 
-            and premium.offer_amount is not None
-            and premium.offer_start
-            and premium.offer_end
-            and premium.offer_start <= now <= premium.offer_end
-        )
+        # Calculate savings if annual plan is cheaper than 12x monthly
+        monthly_total_for_year = premium.current_monthly * 12
+        annual_price = premium.current_annual
+        annual_savings = monthly_total_for_year - annual_price if annual_price < monthly_total_for_year else 0
 
         return Response({
             "id": premium.id,
-            "amount": premium.current_amount,
-            "original_amount": premium.amount,
+
+            # Base prices
+            "monthly_amount": str(premium.monthly_amount),
+            "annual_amount": str(premium.annual_amount),
+
+            # Offer info
             "offer_active": premium.offer_active,
-            "offer_valid_now": offer_valid_now,
-            "offer_amount": premium.offer_amount,
+            "offer_valid_now": premium.is_offer_active,
+            "offer_monthly_amount": (
+                str(premium.monthly_offer)
+                if premium.monthly_offer is not None
+                else None
+            ),
+            "offer_annual_amount": (
+                str(premium.annual_offer)
+                if premium.annual_offer is not None
+                else None
+            ),
             "offer_start": premium.offer_start,
             "offer_end": premium.offer_end,
+
+            # ✅ What frontend actually needs
+            "current_monthly_amount": str(premium.current_monthly),
+            "current_annual_amount": str(premium.current_annual),
+            "annual_savings": str(annual_savings) if annual_savings else "0",
         })
+
 
 
 from rest_framework.exceptions import NotFound   
@@ -552,8 +839,36 @@ class PromoterMeAPIView(RetrieveAPIView):
             if not promoter:
                 raise NotFound("You are not registered as a promoter")
 
-            from .serializers import PromoterSerializer
+            # Lazy expiry check
+            active_sub = Subscription.objects.filter(promoter=promoter, status="active").order_by("-expires_at").first()
+            if active_sub:
+                active_sub.mark_expired_if_needed()
+                # Refresh promoter instance in case it was demoted
+                promoter.refresh_from_db()
+
             serializer = PromoterSerializer(promoter, context={"request": request})
+
+            # Re-fetch active_sub in case it was just expired above
+            active_sub = Subscription.objects.filter(promoter=promoter, status="active").order_by("-expires_at").first()
+            
+            if promoter.promoter_type == "paid" and active_sub:
+                subscription_info = {
+                    "is_paid": True,
+                    "plan_type": active_sub.plan_type,
+                    "amount": str(active_sub.amount),
+                    "started_at": active_sub.started_at,
+                    "expires_at": active_sub.expires_at,
+                    "days_remaining": max((active_sub.expires_at.date() - timezone.now().date()).days, 0)
+                }
+            else:
+                subscription_info = {
+                    "is_paid": False,
+                    "plan_type": None,
+                    "amount": None,
+                    "started_at": None,
+                    "expires_at": None,
+                    "days_remaining": 0
+                }
 
             data = {
                 "user": {
@@ -565,6 +880,7 @@ class PromoterMeAPIView(RetrieveAPIView):
                     "roles": list(user.user_roles.values_list("role__name", flat=True)),
                 },
                 "promoter_profile": serializer.data,
+                "subscription": subscription_info
             }
 
             return Response(data, status=status.HTTP_200_OK)
@@ -584,7 +900,8 @@ class UnpaidPromoterDashboardAPIView(APIView):
                 {"detail": "Only unpaid promoters can access this dashboard."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-
+        if not promoter.is_approved:
+            return Response({"detail": "Your promoter account is not yet approved."}, status=status.HTTP_403_FORBIDDEN)
         # Total promoted products
         promoted_products = PromotedProduct.objects.filter(promoter=promoter).count()
 
@@ -846,7 +1163,7 @@ class PromoterWalletSummaryAPIView(APIView):
         )
         withdrawable_balance = max(promoter.wallet_balance - pending_withdrawals, 0)
         recent_commissions = PromoterCommission.objects.filter(
-            promoter=promoter).order_by('-created_at')[:5].values('amount', 'created_at', 'status')
+            promoter=promoter).order_by('-created_at')[:5].values('amount', 'created_at', 'status', 'earning_type', 'order__order_number')
 
         recent_withdrawals = WithdrawalRequest.objects.filter(
             promoter=promoter).order_by('-requested_at')[:5].values('amount', 'requested_at', 'status')

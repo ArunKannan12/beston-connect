@@ -13,6 +13,12 @@ class OrdersConfig(AppConfig):
         import orders.signals
 
         try:
+            import sys
+            # Only start the thread if we are running the server
+            if 'runserver' not in sys.argv:
+                # If we're not running runserver, don't start the thread (prevents issues during migrate/makemigrations)
+                return
+
             # Prevent multiple threads if Django reloads (e.g., in dev or multiple workers)
             if not any(t.name == "auto_tracking_thread" for t in threading.enumerate()):
                 from orders.tasks import auto_update_tracking

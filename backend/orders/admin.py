@@ -1,7 +1,16 @@
 
 # delivery/admin.py
 from django.contrib import admin
-from .models import Order, OrderItem, ShippingAddress,Refund,ReturnRequest,ReturnRecoveryAccount,ReturnRecoveryTransaction
+from .models import (
+                Order, 
+                OrderItem, 
+                ShippingAddress,
+                Refund,
+                ReturnRequest,
+                ReturnRecoveryAccount,
+                ReturnRecoveryTransaction,
+                ReplacementRequest
+            )
 
 from django.contrib import admin
 from django.utils.html import format_html
@@ -157,3 +166,49 @@ class ReturnRecoveryTransactionAdmin(admin.ModelAdmin):
 #     readonly_fields = ("created_at", "updated_at", "shipped_at", "delivered_at")
 #     ordering = ("-created_at",)
 
+class ReplacementRequestInline(admin.TabularInline):
+    model = ReplacementRequest
+    extra = 0
+    fields = (
+        "order_item",
+        "user",
+        "reason",
+        "status",
+        "admin_decision",
+        "admin_comment",
+        "delhivery_status_type",
+        "delhivery_status",
+        "delhivery_status_updated_at",
+        "created_at",
+        "updated_at",
+    )
+    readonly_fields = (
+        "created_at",
+        "updated_at",
+        "delhivery_status_updated_at",
+    )
+    autocomplete_fields = ("order_item", "user")
+    show_change_link = True
+
+@admin.register(ReplacementRequest)
+class ReplacementRequestAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "order",
+        "order_item",
+        "user",
+        "status",
+        "admin_decision",
+        "delhivery_status",
+        "created_at",
+        "updated_at",
+    )
+    list_filter = ("status", "admin_decision", "delhivery_status_type")
+    search_fields = (
+        "order__order_number",
+        "order_item__id",
+        "user__username",
+        "user__email",
+    )
+    autocomplete_fields = ("order", "order_item", "user")
+    readonly_fields = ("created_at", "updated_at", "shipped_at", "delivered_at")

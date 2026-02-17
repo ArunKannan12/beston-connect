@@ -1,0 +1,4 @@
+Operations to perform:
+  Apply all migrations: promoter
+Running migrations:
+  Applying promoter.0024_promoter_total_sales_count... OK

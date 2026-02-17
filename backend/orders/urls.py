@@ -23,7 +23,7 @@ from .views import (
 from .returnReplacement import (
     # Return request flows
     ReturnRequestCreateAPIView,
-    ReturnRequestUpdateAPIView,
+    ReturnRequestBulkUpdateAPIView,
     ReturnRequestListAPIView,
     ReturnRequestDetailAPIView,
 
@@ -33,7 +33,7 @@ from .returnReplacement import (
     ReplacementRequestDetailAPIView,
     ReplacementRequestListAPIView,
     ReplacementRequestUpdateAPIView,
-    ReturnRequestRefundAPIView
+    ReturnRequestRefundAPIView,
     
    
 )
@@ -49,37 +49,33 @@ urlpatterns = [
 
     # 📦 Customer Order APIs
     path('orders/', OrderListAPIView.as_view(), name='orders-list'),
-    path('orders/<str:order_number>/', OrderDetailAPIView.as_view(), name='orders-detail'),
+    path('order-detail/<str:order_number>/', OrderDetailAPIView.as_view(), name='orders-detail'),
     path('orders/<str:order_number>/pay/', OrderPaymentAPIView.as_view(), name='orders-pay'),
     path('orders/<str:order_number>/cancel/', CancelOrderAPIView.as_view(), name='orders-cancel'),
     path('orders/<str:order_number>/razorpay/', RazorpayOrderCreateAPIView.as_view(), name='orders-razorpay-create'),
     path('orders/razorpay/verify/', RazorpayPaymentVerifyAPIView.as_view(), name='orders-razorpay-verify'),
-    path("<str:order_number>/track/", OrderTrackingAPIView.as_view(), name="order-track"),
+    path("orders/<str:order_number>/track/", OrderTrackingAPIView.as_view(), name="order-track"),
 
     # 🏠 Shipping Address APIs
     path('shipping-addresses/', ShippingAddressListCreateView.as_view(), name='shipping-addresses-list-create'),
     path('shipping-addresses/<int:id>/', ShippingAddressRetrieveUpdateDestroyView.as_view(), name='shipping-addresses-detail'),
 
-   # Customer creates a return request
+   # Return request flows
     path("returns/create/", ReturnRequestCreateAPIView.as_view(), name="return-create"),
-
-    # Admin (or staff) updates return status (approve/reject/refunded etc.)
-    path("returns/<int:returnId>/update/", ReturnRequestUpdateAPIView.as_view(), name="return-update"),
-
-    # List of return requests (customer → their own, admin → all)
     path("returns/", ReturnRequestListAPIView.as_view(), name="return-list"),
-
-    # Details of a single return request
-    # urls.py
-    path("returns/<int:returnId>/", ReturnRequestDetailAPIView.as_view()),
-    path('returns/<int:return_id>/process_refund/', ReturnRequestRefundAPIView.as_view(), name='return-refund'),
+    path("returns/<int:returnId>/", ReturnRequestDetailAPIView.as_view(), name="return-detail"),
     path("refund-status/<str:order_number>/", RefundStatusAPIView.as_view(), name="refund-status"),
 
-    # replacements/ endpoints should use plural like returns/
+    # Replacement request flows
     path("replacements/create/", ReplacementRequestCreateAPIView.as_view(), name="replacement-create"),
-    path("replacements/<int:pk>/update/", ReplacementRequestUpdateAPIView.as_view(), name="replacement-update"),
     path("replacements/", ReplacementRequestListAPIView.as_view(), name="replacement-list"),
     path("replacements/<int:pk>/", ReplacementRequestDetailAPIView.as_view(), name="replacement-detail"),
+    path("replacements/<int:pk>/update/", ReplacementRequestUpdateAPIView.as_view(), name="replacement-update"),
+    
+    # Admin actions
+    path("admin/returns/bulk-update/", ReturnRequestBulkUpdateAPIView.as_view(), name="return-request-bulk-update"),
+    path('admin/returns/refund/', ReturnRequestRefundAPIView.as_view(), name='return-refund'),
+    
     path("orders/<str:order_number>/generate-labels/", GenerateDelhiveryLabelsAPIView.as_view(), name="generate-item-label"),
 
 

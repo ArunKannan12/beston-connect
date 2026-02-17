@@ -76,86 +76,73 @@ def auto_update_tracking():
 
 
 def apply_commission_cron(request):
-    """
-    Triggered by cron-job.org.
-    Applies promoter commission for orders that:
-      - Are paid
-      - Have not yet had commission applied
-      - Have delivered items whose return window is closed
-    """
-
     logger.warning("[CRON] Commission cron triggered")
 
-    # 1️⃣ Security check using header
+    # 1️⃣ Security check
     secret = request.headers.get("X-CRON-KEY")
     if secret != settings.CRON_SECRET_KEY:
-        logger.warning("[CRON] Unauthorized request – invalid X-CRON-KEY")
+        logger.warning("[CRON] Unauthorized request")
         return JsonResponse({"error": "Unauthorized"}, status=403)
 
-    # 2️⃣ Get orders waiting for commission
-    orders = Order.objects.filter(is_paid=True, is_commission_applied=False)
-    logger.warning(f"[CRON] Found {orders.count()} orders pending commission")
+    # 2️⃣ Fetch eligible ORDER ITEMS
+    items = OrderItem.objects.select_related(
+        "order", "product_variant", "promoter"
+    ).filter(
+        order__is_paid=True,
+        promoter__isnull=False,
+        is_commission_applied=False,
+        status=OrderItemStatus.DELIVERED
+    )
+
+    logger.warning(f"[CRON] Found {items.count()} items pending commission")
 
     applied_count = 0
 
-    for order in orders:
-        logger.warning(f"[ORDER] Checking Order {order.id}")
-        logger.warning(f"[ORDER] delivered_at={order.delivered_at}, is_paid={order.is_paid}")
+    for item in items:
+        order = item.order
+        pv = item.product_variant
+        promoter = item.promoter
 
-        eligible_items = order.items.filter(status=OrderItemStatus.DELIVERED)
-        logger.warning(f"[ORDER] Delivered items: {[i.id for i in eligible_items]}")
+        logger.warning(f"[ITEM] Checking item {item.id} (Order {order.id})")
 
+        # 3️⃣ Check return eligibility
         commission_due = False
 
-        for item in eligible_items:
-            pv = item.product_variant
-            logger.warning(
-                f"[ITEM] Item {item.id}: allow_return={pv.allow_return}, "
-                f"return_days={pv.return_days}"
-            )
-
-            # Non-returnable → immediate commission
-            if not pv.allow_return:
-                logger.warning(f"[ITEM] Item {item.id} is non-returnable → commission eligible")
-                commission_due = True
-                break
-
-            # Returnable → check return window
-            delivered_date = order.delivered_at.date() if order.delivered_at else None
-            logger.warning(f"[ITEM] delivered_date={delivered_date}")
-
-            if not delivered_date:
-                logger.warning(f"[SKIP] Item {item.id}: delivered_at missing")
+        if not pv.allow_return:
+            commission_due = True
+        else:
+            if not order.delivered_at:
                 continue
 
+            delivered_date = order.delivered_at.date()
             return_days = pv.return_days or 0
             return_end_date = delivered_date + timedelta(days=return_days)
-            logger.warning(
-                f"[ITEM] return_end_date={return_end_date}, today={date.today()}"
-            )
 
             if date.today() >= return_end_date:
-                logger.warning(f"[ITEM] Item {item.id} return window closed → commission eligible")
                 commission_due = True
-                break
-            else:
-                logger.warning(f"[ITEM] Item {item.id} return window still open")
 
-        if commission_due:
-            logger.warning(f"[APPLY] Applying commission for Order {order.id}")
-            apply_promoter_commission(order)
+        if not commission_due:
+            logger.warning(f"[SKIP] Item {item.id} return window still open")
+            continue
 
-            order.is_commission_applied = True
-            order.save(update_fields=["is_commission_applied"])
-
-            applied_count += 1
-            logger.warning(f"[APPLY] Commission applied for Order {order.id}")
+        # 4️⃣ Check subscription at ORDER TIME
+        if promoter.has_active_subscription_at(order.created_at):
+            status = "credited"
         else:
-            logger.warning(f"[SKIP] Order {order.id} not eligible for commission")
+            status = "pending"
 
-    logger.warning(f"[CRON] Completed. Commission applied for {applied_count} orders.")
+        # 5️⃣ Apply commission (ITEM LEVEL)
+        apply_promoter_commission(item, status=status)
+
+        item.is_commission_applied = True
+        item.save(update_fields=["is_commission_applied"])
+
+        applied_count += 1
+        logger.warning(f"[APPLY] Commission applied for item {item.id}")
+
+    logger.warning(f"[CRON] Completed. Commission applied for {applied_count} items")
 
     return JsonResponse({
         "status": "success",
-        "message": f"Commission applied for {applied_count} orders."
+        "applied_items": applied_count
     })

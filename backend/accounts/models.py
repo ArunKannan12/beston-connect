@@ -13,6 +13,7 @@ ROLE_CHOICES = [
         ('promoter', 'Promoter'),
         ('admin', 'Admin'),
         ('investor','Investor'),
+        ('manager', 'Manager'),
     ] 
 email_validator = EmailValidator(
     message="Enter a valid email address"
@@ -172,6 +173,10 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
             investor_obj, created = Investor.objects.get_or_create(user=self)
             print(f"[DEBUG] Investor profile {'created' if created else 'exists'}: {investor_obj}")
 
+        elif role_name_lower == "manager":
+            from manager.models import Manager
+            manager_obj, created = Manager.objects.get_or_create(user=self)
+            print(f"[DEBUG] Manager profile {'created' if created else 'exists'}: {manager_obj}")
 
     def has_role(self, role_name: str) -> bool:
         """Check if the user has a given role. Always checks DB."""

@@ -1,6 +1,15 @@
 from django.conf import settings
 from rest_framework import serializers
-from .models import Promoter, PromoterCommission, WithdrawalRequest, PromotedProduct, PremiumSettings,CommissionLevel
+from .models import (Promoter, 
+                    PromoterCommission, 
+                    WithdrawalRequest, 
+                    PromotedProduct, 
+                    PremiumSettings,
+                    CommissionLevel,
+                    Subscription,
+                    PromoterReferral,
+                    PromoterBankAccount
+                    )
 from products.serializers import ProductVariantSerializer
 from products.models import ProductVariant
 from orders.models import Order
@@ -74,8 +83,6 @@ class PromotedProductSerializer(serializers.ModelSerializer):
 
         return f"{base_url}/products/{product.slug}/?variant={variant_slug}&ref={obj.promoter.referral_code}"
 
-    
-
 class PromoterSerializer(serializers.ModelSerializer):
     parent_promoter = serializers.SerializerMethodField()
     promoted_products=PromotedProductSerializer(many=True,read_only=True)
@@ -86,18 +93,7 @@ class PromoterSerializer(serializers.ModelSerializer):
 
     phone_number = serializers.CharField(source="user.phone_number", required=False)
     
-    bank_account_number = serializers.CharField(
-        validators=[RegexValidator(regex=r'^\d{9,18}$', message="Bank account number must be 9–18 digits")]
-    )
-    ifsc_code = serializers.CharField(
-        validators=[RegexValidator(regex=r'^[A-Z]{4}0[A-Z0-9]{6}$', message='Enter a valid IFSC code')]
-    )
-    bank_name = serializers.CharField(
-        validators=[RegexValidator(regex=r'^[A-Za-z ]+$', message="Bank name should contain only letters and spaces.")]
-    )
-    account_holder_name = serializers.CharField(
-        validators=[RegexValidator(regex=r'^[A-Za-z .]+$', message="Account holder name should contain only letters, spaces, and dots.")]
-    )
+    
     profile_image=serializers.SerializerMethodField()
     referral_link=serializers.SerializerMethodField()
 
@@ -105,7 +101,7 @@ class PromoterSerializer(serializers.ModelSerializer):
         model = Promoter
         fields = '__all__'
         read_only_fields = [
-            'user', 'referral_code', 'total_sales_count', 'total_commission_earned',
+            'user', 'referral_code', 'total_commission_earned',
             'wallet_balance', 'is_eligible_for_withdrawal', 'premium_activated_at','referral_link'
         ]
     def get_profile_image(self,obj):
@@ -177,12 +173,13 @@ class PromoterSerializer(serializers.ModelSerializer):
 
 
     def get_parent_promoter(self, obj):
-        # Ensure obj is a single instance
-        if hasattr(obj, "referred_by") and obj.referred_by:
+        referral = getattr(obj, 'referral_entry', None)
+        if referral:
+            referrer = referral.referrer_promoter
             return {
-                "id": obj.referred_by.id,
-                "email": obj.referred_by.user.email,
-                "promoter_type": obj.referred_by.promoter_type
+                "id": referrer.id,
+                "email": referrer.user.email,
+                "promoter_type": referrer.promoter_type
             }
         return None
     
@@ -238,75 +235,110 @@ class PromotedProductLightSerializer(serializers.ModelSerializer):
         # ✅ Match your frontend route
         return f"{base_url}/products/{product.slug}/?variant={variant.variant_name}&ref={obj.promoter.referral_code}"
 
+class PromoterBankAccountSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PromoterBankAccount
+        fields = [
+            "id",
+            "promoter",
+            "account_holder_name",
+            "account_number",
+            "ifsc_code",
+            "bank_name",
+            "is_verified",
+            "added_at",
+        ]
+        read_only_fields = ["promoter", "is_verified", "added_at"]
 
 class PromoterLightSerializer(serializers.ModelSerializer):
     promoted_products = PromotedProductLightSerializer(many=True, read_only=True)
     parent_promoter = serializers.SerializerMethodField()
     phone_number = serializers.CharField(source="user.phone_number", read_only=True)
-    bank_account_number = serializers.CharField(
-        validators=[RegexValidator(regex=r'^\d{9,18}$', message="Bank account number must be 9–18 digits")]
-    )
-    ifsc_code = serializers.CharField(
-        validators=[RegexValidator(regex=r'^[A-Z]{4}0[A-Z0-9]{6}$', message='Enter a valid IFSC code')]
-    )
-    bank_name = serializers.CharField(
-        validators=[RegexValidator(regex=r'^[A-Za-z ]+$', message="Bank name should contain only letters and spaces.")]
-    )
-    account_holder_name = serializers.CharField(
-        validators=[RegexValidator(regex=r'^[A-Za-z .]+$', message="Account holder name should contain only letters, spaces, and dots.")]
-    )
+    user = serializers.SerializerMethodField()
+    
     class Meta:
         model = Promoter
         fields = [
+            'id',
             'promoter_type',
             'phone_number',
-            'bank_account_number',
-            'ifsc_code',
-            'bank_name',
-            'account_holder_name',
             'referral_code',
             'premium_activated_at',
-            'total_sales_count',
             'total_commission_earned',
             'wallet_balance',
             'is_eligible_for_withdrawal',
             'promoted_products',
-            'parent_promoter'
+            'parent_promoter',
+            'user',
+            'approved_at'
         ]
 
+    def get_user(self, obj):
+        return {
+            'first_name': obj.user.first_name,
+            'last_name': obj.user.last_name,
+            'email': obj.user.email
+        }
+
     def get_parent_promoter(self, obj):
-        if obj.referred_by:
+        referral = getattr(obj, 'referral_entry', None)
+        if referral:
+            p = referral.referrer_promoter
             return {
-                "id": obj.referred_by.id,
-                "email": obj.referred_by.user.email,
-                "promoter_type": obj.referred_by.promoter_type
+                "id": p.id,
+                "email": p.user.email,
+                "promoter_type": p.promoter_type
             }
         return None
 
 
-
 class PromoterCommissionSerializer(serializers.ModelSerializer):
     promoter = PromoterSerializer(read_only=True)
-    promoter_id = serializers.PrimaryKeyRelatedField(queryset=Promoter.objects.all(), write_only=True)
+    promoter_id = serializers.PrimaryKeyRelatedField(
+        queryset=Promoter.objects.all(),
+        write_only=True,
+        source='promoter'
+    )
 
     order = serializers.SerializerMethodField()
-    order_id = serializers.PrimaryKeyRelatedField(queryset=Order.objects.all(), write_only=True)
+    order_id = serializers.PrimaryKeyRelatedField(
+        queryset=Order.objects.all(),
+        write_only=True,
+        source='order',
+        required=False,
+        allow_null=True
+    )
 
     product_variant = ProductVariantSerializer(read_only=True)
-    product_variant_id = serializers.PrimaryKeyRelatedField(queryset=ProductVariant.objects.all(), write_only=True)
+    product_variant_id = serializers.PrimaryKeyRelatedField(
+        queryset=ProductVariant.objects.all(),
+        write_only=True,
+        source='product_variant',
+        required=False,
+        allow_null=True
+    )
 
     class Meta:
         model = PromoterCommission
         fields = [
-            'id', 'promoter', 'promoter_id', 
-            'order', 'order_id', 
-            'product_variant', 'product_variant_id', 
-            'amount'
+            'id',
+            'promoter',
+            'promoter_id',
+            'order',
+            'order_id',
+            'product_variant',
+            'product_variant_id',
+            'amount',
+            'earning_type',
+            'created_at',
         ]
-
+        read_only_fields = ['id', 'created_at']
     def get_order(self, obj):
+        if not obj.order:
+            return None
         from orders.serializers import OrderSerializer
-        return OrderSerializer(obj.order).data
+        return OrderSerializer(obj.order, context=self.context).data
+
 
 
 class WithdrawalRequestSerializer(serializers.ModelSerializer):
@@ -374,6 +406,10 @@ class WithdrawalRequestAdminSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {"detail": "Insufficient wallet balance."}
                 )
+            if not promoter.bank_account_number or not promoter.ifsc_code or not promoter.bank_name or not promoter.account_holder_name:
+                raise serializers.ValidationError(
+                    {"detail": "Bank details must be provided before withdrawal approval."}
+                )
 
         return attrs
 
@@ -409,44 +445,95 @@ class WithdrawalRequestAdminSerializer(serializers.ModelSerializer):
 
         return instance
 
-    
+class MinimalPromoterSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Promoter
+        fields = ["promoter_type", "is_approved"]
+
 class PremiumSettingSerializer(serializers.ModelSerializer):
+    current_monthly = serializers.SerializerMethodField(read_only=True)
+    current_annual = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = PremiumSettings
         fields = [
-            "amount",
-            "offer_amount",
+            "monthly_amount",
+            "annual_amount",
             "offer_active",
+            "monthly_offer",
+            "annual_offer",
             "offer_start",
             "offer_end",
+            "current_monthly",
+            "current_annual",
         ]
+
+    # SerializerMethodFields
+    def get_current_monthly(self, obj):
+        return obj.current_amount(plan_type="monthly")
+
+    def get_current_annual(self, obj):
+        return obj.current_amount(plan_type="annual")
+
+    # Field-level validation (optional but DRF-friendly)
+    def validate_monthly_offer(self, value):
+        monthly_amount = (
+            self.initial_data.get("monthly_amount")
+            or getattr(self.instance, "monthly_amount", None)
+        )
+
+        if value is not None and monthly_amount is not None:
+            if value >= monthly_amount:
+                raise serializers.ValidationError(
+                    "Monthly offer must be less than normal monthly amount."
+                )
+        return value
+
+
+    def validate_annual_offer(self, value):
+        annual_amount = (
+            self.initial_data.get("annual_amount")
+            or getattr(self.instance, "annual_amount", None)
+        )
+
+        if value is not None and annual_amount is not None:
+            if value >= annual_amount:
+                raise serializers.ValidationError(
+                    "Annual offer must be less than normal annual amount."
+                )
+        return value
+
+
+    # Object-level validation
     def validate(self, attrs):
-        amount = attrs.get("amount")
-        offer_amount = attrs.get("offer_amount")
-        offer_active = attrs.get("offer_active")
-        offer_start = attrs.get("offer_start")
-        offer_end = attrs.get("offer_end")
+        offer_active = attrs.get(
+            "offer_active",
+            getattr(self.instance, "offer_active", False)
+        )
 
-        # rule 1: offer_amount must be less than main amount
-        if offer_active and offer_amount:
-            if offer_amount >= amount:
-                raise serializers.ValidationError(
-                    "Offer amount must be LESS than normal amount."
-                )
-
-        # rule 2: both start and end dates required
         if offer_active:
+            offer_start = attrs.get(
+                "offer_start",
+                getattr(self.instance, "offer_start", None)
+            )
+            offer_end = attrs.get(
+                "offer_end",
+                getattr(self.instance, "offer_end", None)
+            )
+
             if not offer_start or not offer_end:
-                raise serializers.ValidationError(
-                    "Offer start and end time are required when offer is active."
-                )
+                raise serializers.ValidationError({
+                    "offer_start": "Offer start and end times are required when offer is active."
+                })
+
             if offer_start >= offer_end:
-                raise serializers.ValidationError(
-                    "Offer end time must be AFTER offer start time."
-                )
+                raise serializers.ValidationError({
+                    "offer_end": "Offer end time must be after offer start time."
+                })
 
         return attrs
-    
+
+        
 class CommissionLevelSerializer(serializers.ModelSerializer):
     class Meta:
         model=CommissionLevel
@@ -458,3 +545,36 @@ class WithdrawalRequestPromoterSerializer(serializers.ModelSerializer):
         model = WithdrawalRequest
         fields = ['id', 'amount', 'status', 'requested_at']
         read_only_fields = ['id', 'status', 'requested_at']
+
+class SubscriptionSerializer(serializers.ModelSerializer):
+    remaining_days = serializers.SerializerMethodField(read_only=True)
+    is_active = serializers.SerializerMethodField(read_only=True)
+    premium_settings_name = serializers.CharField(source='premium_settings.name', read_only=True)
+
+    class Meta:
+        model = Subscription
+        fields = [
+            'id',
+            'plan_type',
+            'status',
+            'amount',
+            'plan_price',
+            'premium_settings_name',
+            'razorpay_payment_id',
+            'razorpay_order_id',
+            'started_at',
+            'expires_at',
+            'remaining_days',
+            'is_active',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = fields
+
+    def get_remaining_days(self, obj):
+        return obj.remaining_days
+
+    def get_is_active(self, obj):
+        return obj.is_active
+
+

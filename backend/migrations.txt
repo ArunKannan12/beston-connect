@@ -1,0 +1,24 @@
+promoter
+ [X] 0001_initial
+ [X] 0002_remove_promoter_deposit_amount_and_more
+ [X] 0003_promoter_promoter_type_promoter_referred_by_and_more
+ [X] 0004_commissionlevel_promoter_premium_activated_at
+ [X] 0005_premiumsettings_promoterpayment_promotedproduct
+ [X] 0006_alter_promoter_account_holder_name_and_more
+ [X] 0007_alter_promoter_phone_number
+ [X] 0008_remove_promoter_application_status_and_more
+ [X] 0009_premiumsettings_offer_active_and_more
+ [X] 0010_promotedproduct_click_count_and_more
+ [X] 0011_withdrawalrequest_processed_at_and_more
+ [X] 0012_alter_commissionlevel_level_and_more
+ [X] 0013_alter_promoter_phone_number
+ [X] 0014_alter_promoter_phone_number
+ [X] 0015_promoter_total_clicks
+ [X] 0016_remove_promoter_total_clicks
+ [X] 0017_remove_withdrawalrequest_processed_at_and_more
+ [X] 0018_alter_withdrawalrequest_status
+ [ ] 0019_referralcommissionsetting_subscriptionsetting_and_more
+ [ ] 0020_remove_promoter_referred_by_and_more
+ [ ] 0021_promoter_approved_at
+ [ ] 0022_alter_subscription_options_and_more
+ [ ] 0023_promotercommission_pending_reason_and_more

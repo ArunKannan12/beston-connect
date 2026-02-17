@@ -6,6 +6,7 @@ from django.db import models
 from django.shortcuts import get_object_or_404
 from rest_framework.exceptions import ValidationError
 import razorpay
+import urllib.parse
 import json
 import logging
 import requests
@@ -553,7 +554,7 @@ def create_delhivery_shipment(order):
             "shipment_width": "10",
             "shipment_height": "10",
             "shipment_length":"10",
-            "return_add": pickup["add"],
+            "return_address": pickup["add"],
             "return_city": pickup["city"],
             "return_state": pickup.get("state", order.shipping_address.state),
             "return_pin": str(pickup["pin"]),
@@ -776,122 +777,152 @@ def create_reverse_pickup(return_request, use_mock=False):
     """
     Creates a reverse pickup (return shipment) in Delhivery for a given ReturnRequest.
     - If use_mock=True → simulates a successful response for local testing.
+    Debugging enabled.
     """
+    try:
+        logger.info(f"[Reverse Pickup] Start for ReturnRequest ID: {return_request.id}")
 
-    # ---------------- MOCK MODE ----------------
-    if use_mock:
-        mock_waybill = f"RVP-MOCK-{return_request.id}"
-        return_request.waybill = mock_waybill
+        # ---------------- MOCK MODE ----------------
+        if use_mock:
+            mock_waybill = f"RVP-MOCK-{return_request.id}"
+            return_request.waybill = mock_waybill
+            return_request.status = "pickup_scheduled"
+            return_request.pickup_date = timezone.now()
+            return_request.save(update_fields=["waybill", "status", "pickup_date"])
+            logger.info(f"[Reverse Pickup][MOCK] Created mock pickup: {mock_waybill}")
+            return {
+                "success": True,
+                "waybill": mock_waybill,
+                "message": "Mock reverse pickup created successfully (no API call).",
+                "data": {"mock": True},
+            }
+
+        # ---------------- REAL API MODE ----------------
+        order = return_request.order
+        address = order.shipping_address
+        pickup = getattr(settings, "DELHIVERY_PICKUP", None)  # Warehouse details
+        client_code = getattr(settings, "DELHIVERY_CLIENT_CODE", None)
+        logger.info(f"[Reverse Pickup] Using real API for ReturnRequest {return_request.id}")
+
+        if not address:
+            logger.error("[Reverse Pickup] Missing customer shipping address.")
+            return {"success": False, "message": "Missing customer shipping address."}
+        if not pickup:
+            logger.error("[Reverse Pickup] Pickup location not configured.")
+            return {"success": False, "message": "Pickup location (warehouse) not configured."}
+        if not client_code:
+            logger.error("[Reverse Pickup] Missing Delhivery client code.")
+            return {"success": False, "message": "Missing Delhivery client code."}
+
+        # ---------------- Weight ----------------
+        try:
+            total_weight_grams = sum(
+                (item.product_variant.get_weight_in_grams() or 500) * item.quantity
+                for item in order.items.all()
+            )
+            total_weight_grams = max(total_weight_grams, 50)
+            logger.info(f"[Reverse Pickup] Total weight calculated: {total_weight_grams}g")
+        except Exception as e:
+            logger.warning(f"[Reverse Pickup] Weight calculation failed: {e}")
+            total_weight_grams = 50
+
+        # ---------------- Product Description ----------------
+        try:
+            products_desc = ", ".join(
+                [item.product_variant.product.name for item in order.items.all()]
+            )[:250]
+            logger.info(f"[Reverse Pickup] Products description: {products_desc}")
+        except Exception as e:
+            products_desc = f"Order {order.order_number}"
+            logger.warning(f"[Reverse Pickup] Failed to build products description: {e}")
+
+        # ---------------- Payload ----------------
+        shipment = {
+            "name": address.full_name,
+            "add": address.address,
+            "city": address.city,
+            "state": address.state or "",
+            "country": address.country or "India",
+            "pin": str(address.postal_code),
+            "phone": [str(address.phone_number)],
+            "order": f"RET-{order.order_number}-{return_request.id}-{int(time.time())}",
+            "payment_mode": "Pickup",
+            "return_name": pickup["name"],
+            "return_address": pickup["add"],
+            "return_city": pickup["city"],
+            "return_state": pickup.get("state", ""),
+            "return_country": pickup.get("country", "India"),
+            "return_pin": str(pickup["pin"]),
+            "return_phone": [str(pickup["phone"])],
+            "products_desc": products_desc,
+            "weight": str(total_weight_grams),
+            "shipment_length": "15",
+            "shipment_width": "15",
+            "shipment_height": "15",
+            "fragile_shipment": False,
+            "quantity": str(sum(item.quantity for item in order.items.all())),
+            "total_amount": str(order.total),
+            "cod_amount": "0.0",
+        }
+
+        payload_dict = {
+            "shipments": [shipment],
+            "pickup_location": {
+                "name": pickup["name"],
+                "add": pickup["add"],
+                "city": pickup["city"],
+                "state": pickup.get("state", ""),
+                "pin": str(pickup["pin"]),
+                "country": pickup.get("country", "India"),
+                "phone": [str(pickup["phone"])],
+            },
+        }
+
+        payload = {"format": "json", "data": json.dumps(payload_dict)}
+        headers = {
+            "Authorization": f"Token {settings.DELHIVERY_API_TOKEN}",
+            "Accept": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+
+        logger.info(f"[Reverse Pickup] Sending payload to Delhivery: {json.dumps(payload_dict, indent=2)}")
+
+        # ---------------- API Call ----------------
+        response = requests.post(
+            f"{DELHIVERY_BASE_URL}/api/cmu/create.json",
+            headers=headers,
+            data=payload,
+            timeout=20
+        )
+
+        logger.info(f"[Reverse Pickup] Delhivery response status: {response.status_code}")
+        logger.debug(f"[Reverse Pickup] Raw response: {response.text}")
+
+        try:
+            data = response.json()
+            logger.info(f"[Reverse Pickup] Parsed JSON response: {data}")
+        except ValueError:
+            logger.error(f"[Reverse Pickup] Invalid JSON response: {response.text}")
+            return {"success": False, "message": "Invalid JSON response.", "raw": response.text}
+
+        if not data.get("packages") or not data["packages"][0].get("waybill"):
+            logger.error(f"[Reverse Pickup] No waybill returned: {data}")
+            return {"success": False, "message": "No waybill returned.", "data": data}
+
+        waybill = data["packages"][0]["waybill"]
+        return_request.waybill = waybill
         return_request.status = "pickup_scheduled"
         return_request.pickup_date = timezone.now()
         return_request.save(update_fields=["waybill", "status", "pickup_date"])
-        return {
-            "success": True,
-            "waybill": mock_waybill,
-            "message": "Mock reverse pickup created successfully (no API call).",
-            "data": {"mock": True},
-        }
 
-    # ---------------- REAL API MODE ----------------
-    order = return_request.order
-    address = order.shipping_address
-    pickup = getattr(settings, "DELHIVERY_PICKUP", None)  # Warehouse details
-    client_code = getattr(settings, "DELHIVERY_CLIENT_CODE", None)
+        logger.info(f"[Reverse Pickup] Pickup scheduled successfully. Waybill: {waybill}")
 
-    if not address:
-        return {"success": False, "message": "Missing customer shipping address."}
-    if not pickup:
-        return {"success": False, "message": "Pickup location (warehouse) not configured."}
-    if not client_code:
-        return {"success": False, "message": "Missing Delhivery client code."}
+        return {"success": True, "waybill": waybill, "data": data}
 
-    try:
-        total_weight_grams = sum(
-            (item.product_variant.get_weight_in_grams() or 500) * item.quantity
-            for item in order.items.all()
-        )
-        total_weight_grams = max(total_weight_grams, 50)  # minimum 50 grams
     except Exception as e:
-        logger.warning(f"Weight calculation failed: {e}")
-        total_weight_grams = 50
+        logger.exception(f"[Reverse Pickup] Exception occurred: {e}")
+        return {"success": False, "message": str(e)}
 
-    try:
-        products_desc = ", ".join(
-            [item.product_variant.product.name for item in order.items.all()]
-        )[:250]
-    except Exception:
-        products_desc = f"Order {order.order_number}"
-
-    # ---------------- Payload ----------------
-    shipment = {
-        "name": address.full_name,
-        "add": address.address,
-        "city": address.city,
-        "state": address.state or "",
-        "country": address.country or "India",
-        "pin": str(address.postal_code),
-        "phone": [str(address.phone_number)],
-        "order": f"RET-{order.order_number}-{return_request.id}-{int(time.time())}",
-        "payment_mode": "Pickup",
-        "return_name": pickup["name"],
-        "return_address": pickup["add"],
-        "return_city": pickup["city"],
-        "return_state": pickup.get("state", ""),
-        "return_country": pickup.get("country", "India"),
-        "return_pin": str(pickup["pin"]),
-        "return_phone": [str(pickup["phone"])],
-        "products_desc": products_desc,
-        "weight": str(total_weight_grams),
-        "shipment_length": "15",
-        "shipment_width": "15",
-        "shipment_height": "15",
-        "fragile_shipment": False,
-        "quantity": str(sum(item.quantity for item in order.items.all())),
-        "total_amount": str(order.total),
-        "cod_amount": "0.0",
-    }
-
-    # ---------------- Payload ----------------
-    payload_dict = {
-     # required by Delhivery
-        "shipments": [shipment],
-        "pickup_location": {
-            "name": pickup["name"],  # <-- use the exact registered warehouse name
-            "add": pickup["add"],
-            "city": pickup["city"],
-            "state": pickup.get("state", ""),
-            "pin": str(pickup["pin"]),
-            "country": pickup.get("country", "India"),
-            "phone": [str(pickup["phone"])],
-        },
-    }
-    payload = {
-        "format": "json",
-        "data": json.dumps(payload_dict)
-    }
-    headers = {
-        "Authorization": f"Token {settings.DELHIVERY_API_TOKEN}",
-        "Accept": "application/json",
-        "Content-Type": "application/x-www-form-urlencoded",
-    }
-
-    response = requests.post(f"{DELHIVERY_BASE_URL}/api/cmu/create.json", headers=headers, data=payload, timeout=20)
-    try:
-        data = response.json()
-    except ValueError:
-        return {"success": False, "message": "Invalid JSON response.", "raw": response.text}
-
-   
-    if not data.get("packages") or not data["packages"][0].get("waybill"):
-        return {"success": False, "message": "No waybill returned.", "data": data}
-
-    waybill = data["packages"][0]["waybill"]
-    return_request.waybill = waybill
-    return_request.status = "pickup_scheduled"
-    return_request.pickup_date = timezone.now()
-    return_request.save(update_fields=["waybill", "status", "pickup_date"])
-
-    return {"success": True, "waybill": waybill, "data": data}
 
 def get_delhivery_return_charge(o_pin, d_pin, weight_grams, payment_type="Pre-paid"):
     """
@@ -940,21 +971,51 @@ def get_delhivery_return_charge(o_pin, d_pin, weight_grams, payment_type="Pre-pa
 
     return Decimal("0.00")
 
+def get_total_replacement_charge(order, weight_grams=None):
+    total_weight = weight_grams or sum(
+        item.product_variant.get_weight_in_grams() * item.quantity
+        for item in order.items.all()
+    )
 
-def apply_return_recovery(user, order, delivery_charge, max_recovery=Decimal('10.00')):
-    """
-    Gradually recover pending return charges:
-    - Recover 10% (minimum ₹5)
-    - Cap by `max_recovery`
-    - If pending < ₹5 → recover entire pending
-    - Add recovered amount to delivery_charge
-    - Log recovery in ReturnRecoveryAccount
-    """
-    from .models import ReturnRecoveryAccount
+    # Reverse charge (customer → warehouse)
+    reverse_charge = get_delhivery_return_charge(
+        o_pin=order.shipping_address.postal_code,
+        d_pin=settings.DELHIVERY_PICKUP.get("pin"),
+        weight_grams=total_weight,
+        payment_type="Pre-paid"
+    )
 
-    # Ensure decimals
+    # Forward charge (warehouse → customer)
+    forward_resp = get_delivery_charge(
+        o_pin=settings.DELHIVERY_PICKUP.get("pin"),
+        d_pin=order.shipping_address.postal_code,
+        weight_grams=total_weight,
+        payment_type="Pre-paid"
+    )
+    forward_charge = Decimal(str(forward_resp.get("charge", 0)))
+
+    total_charge = reverse_charge + forward_charge
+    return total_charge, reverse_charge, forward_charge
+
+
+def apply_pending_recovery(user, order, delivery_charge, recovery_type="return", max_recovery=None, reference_id=None):
+    """
+    Gradually recover pending return or replacement charges:
+
+    Parameters:
+    - user: User instance
+    - order: Order instance (for logging)
+    - delivery_charge: current delivery charge (Decimal)
+    - recovery_type: 'return' or 'replacement'
+    - max_recovery: maximum recovery to apply in this checkout
+    - reference_id: optional ID of ReturnRequest or ReplacementRequest
+
+    Returns:
+    - delivery_charge (Decimal) with recovery added
+    - applied (Decimal) amount recovered from ledger
+    """
     delivery_charge = Decimal(str(delivery_charge))
-    max_recovery = Decimal(str(max_recovery))
+    max_recovery = Decimal(str(max_recovery)) if max_recovery is not None else Decimal("10.00")
 
     account, _ = ReturnRecoveryAccount.objects.get_or_create(user=user)
 
@@ -975,11 +1036,202 @@ def apply_return_recovery(user, order, delivery_charge, max_recovery=Decimal('10
 
     # Apply recovery to ledger
     applied = account.apply_payment(
-        recovery_amount,
-        source=f"Checkout Order #{getattr(order, 'id', 'Preview')}"
+        amount=recovery_amount,
+        source=f"{recovery_type.capitalize()} Checkout Order #{getattr(order, 'id', 'Preview')}",
+        source_type=recovery_type,
+        reference_id=reference_id
     )
 
     # Add to delivery charge
     delivery_charge += applied
 
     return delivery_charge, applied
+
+def calculate_replacement_delivery(user, order, weight_grams=None, max_recovery=None):
+    """
+    Calculates the total delivery charge for a replacement order,
+    applies any pending recovery from the user's ReturnRecoveryAccount,
+    and returns the final charge along with a breakdown.
+
+    Returns:
+        {
+            "total_charge": Decimal,          # total replacement delivery before recovery
+            "reverse_charge": Decimal,        # customer -> warehouse
+            "forward_charge": Decimal,        # warehouse -> customer
+            "recovery_applied": Decimal,      # amount recovered from pending ledger
+            "final_charge": Decimal           # total charge customer needs to pay
+        }
+    """
+    logger.debug(f"Starting calculate_replacement_delivery for order_id={order.id}, user_id={user.id}")
+
+    # 1️⃣ Get replacement delivery charges
+    total_charge, reverse_charge, forward_charge = get_total_replacement_charge(order, weight_grams)
+    logger.debug(
+        f"Replacement delivery charges calculated: total_charge={total_charge}, "
+        f"reverse_charge={reverse_charge}, forward_charge={forward_charge}"
+    )
+
+    # 2️⃣ Apply any pending recovery
+    final_charge, recovery_applied = apply_pending_recovery(
+        user=user,
+        order=order,
+        delivery_charge=total_charge,
+        recovery_type="replacement",
+        max_recovery=max_recovery,
+        reference_id=order.id
+    )
+    logger.debug(
+        f"After applying pending recovery: final_charge={final_charge}, recovery_applied={recovery_applied}"
+    )
+
+    result = {
+        "total_charge": total_charge,
+        "reverse_charge": reverse_charge,
+        "forward_charge": forward_charge,
+        "recovery_applied": recovery_applied,
+        "final_charge": final_charge,
+    }
+
+    logger.debug(f"calculate_replacement_delivery result: {result}")
+    return result
+
+def create_repl_shipment(*, replacement_request):
+    logger.info("🚀 Creating REPL shipment for ReplacementRequest %s", replacement_request.id)
+    import time
+    order = replacement_request.order
+    order_id = f"REPL-{order.order_number}-{replacement_request.id}-{int(time.time())}"
+    item = replacement_request.order_item
+    addr = order.shipping_address
+
+    pickup = settings.DELHIVERY_PICKUP  # Warehouse details
+    pickup_location_name = settings.DELHIVERY_PICKUP_LOCATION
+    api_token = settings.DELHIVERY_API_TOKEN
+
+    if not addr:
+        raise ValueError("Order has no shipping address")
+
+    url = "https://track.delhivery.com/api/cmu/create.json"
+
+    # Calculate total weight
+    try:
+        total_weight = sum(
+            i.product_variant.get_weight_in_grams() * i.quantity
+            for i in order.items.all()
+        )
+        if total_weight <= 0:
+            total_weight = 500
+    except Exception:
+        logger.exception("Error calculating total weight")
+        total_weight = 500
+
+    # Manifest for REPL shipment
+    manifest = {
+        "shipments": [
+            {
+                # ✅ DELIVERY → CUSTOMER
+                "name": addr.full_name,
+                "add": addr.address,
+                "city": addr.city,
+                "state": addr.state,
+                "country": addr.country or "India",
+                "pin": str(addr.postal_code),
+                "phone": [str(addr.phone_number)],
+
+                "order": order_id,
+                "payment_mode": "REPL",
+
+                # ✅ PICKUP / RETURN → WAREHOUSE
+                "return_name": pickup["name"],
+                "return_address": pickup["add"],
+                "return_city": pickup["city"],
+                "return_state": pickup.get("state", ""),
+                "return_pin": str(pickup["pin"]),
+                "return_country": pickup.get("country", "India"),
+                "return_phone": [str(pickup["phone"])],
+
+                "products_desc": item.product_variant.product.name,
+                "quantity": str(item.quantity or 1),
+                "weight": str(total_weight),
+                "shipping_mode": "Surface",
+            }
+        ],
+        "pickup_location": {
+            "name": pickup_location_name,
+            "add": pickup["add"],
+            "city": pickup["city"],
+            "state": pickup.get("state", ""),
+            "pin": str(pickup["pin"]),
+            "country": pickup.get("country", "India"),
+            "phone": [str(pickup["phone"])],
+        },
+    }
+
+
+    payload = {
+        "format": "json",
+        "data": json.dumps(manifest)
+    }
+
+    headers = {
+        "Authorization": f"Token {api_token}",
+        "Accept": "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+
+    response = requests.post(url, headers=headers, data=payload, timeout=20)
+    logger.info("📬 Delhivery response: status=%s body=%s", response.status_code, response.text)
+
+    try:
+        resp_json = response.json()
+    except Exception:
+        raise RuntimeError(f"Invalid JSON from Delhivery: {response.text}")
+
+    if response.status_code != 200 or not resp_json.get("success"):
+        error_msg = "Delhivery shipment failed"
+
+        try:
+            pkg = resp_json.get("packages", [{}])[0]
+            remarks = pkg.get("remarks")
+            if remarks:
+                error_msg = ", ".join(remarks) if isinstance(remarks, list) else str(remarks)
+        except Exception:
+            pass
+
+        error_lower = error_msg.lower()
+
+        # 🚫 Embargo / non-serviceable pincode
+        if "embargo" in error_lower or "non serviceable" in error_lower:
+            replacement_request.status = "failed"
+            replacement_request.admin_comment = (
+                f"Replacement shipment blocked by Delhivery: {error_msg}"
+            )
+            replacement_request.delhivery_status = error_msg
+            replacement_request.save(update_fields=[
+                "status",
+                "admin_comment",
+                "delhivery_status"
+            ])
+
+            return {
+                "success": False,
+                "error": error_msg,
+                "error_type": "PINCODE_NOT_SERVICEABLE"
+            }
+
+
+        # ❌ Any other Delhivery error
+        replacement_request.status = "failed"
+        replacement_request.admin_comment = f"Delhivery error: {error_msg}"
+        replacement_request.delhivery_status = error_msg
+        replacement_request.save(update_fields=[
+            "status",
+            "admin_comment",
+            "delhivery_status"
+        ])
+
+        raise RuntimeError(error_msg)
+
+
+
+    logger.info("✅ REPL shipment created successfully")
+    return resp_json

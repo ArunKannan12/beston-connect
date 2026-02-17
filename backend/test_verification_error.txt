@@ -1,0 +1,2 @@
+C:\Users\D E L L\Desktop\react django projects\ecommerce\env\Lib\site-packages\razorpay\client.py:4: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources

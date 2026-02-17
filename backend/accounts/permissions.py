@@ -50,3 +50,11 @@ class IsAdminOrReadOnly(BasePermission):
         if request.method in SAFE_METHODS:
             return True
         return IsAdmin().has_permission(request, view)
+
+
+class IsInvestorOrAdmin(BasePermission):
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and (
+            request.user.is_staff or
+            getattr(request.user, 'role', '') in ['admin', 'manager']
+        )

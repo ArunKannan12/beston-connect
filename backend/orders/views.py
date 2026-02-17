@@ -151,7 +151,7 @@ class OrderDetailAPIView(RetrieveAPIView):
     def get_queryset(self):
         return (
             Order.objects.filter(user=self.request.user)
-            .select_related("shipping_address", "promoter")
+            .select_related("shipping_address")
             .prefetch_related("items__product_variant")
         )
     
@@ -346,8 +346,7 @@ class RazorpayOrderCreateAPIView(APIView):
 
         return Response(result["response"], status=status.HTTP_200_OK)
 
-
-# --------- RazorpayPaymentVerifyAPIView (input changed) ---------
+# --------- RazorpayPaymentVerifyAPIView (cleaned-up) ---------
 class RazorpayPaymentVerifyAPIView(APIView):
     permission_classes = [IsCustomer]
 
@@ -386,22 +385,30 @@ class RazorpayPaymentVerifyAPIView(APIView):
                 variant.stock -= item.quantity
                 variant.save(update_fields=["stock"])
 
-        # ✅ Apply recovery now
+        # ✅ Apply pending recovery dynamically for all types
+        applied_recoveries = {}
         if hasattr(order.user, "recovery_account"):
-            from orders.utils import apply_return_recovery
-            delivery_charge_with_recovery, applied_recovery = apply_return_recovery(
-                user=order.user,
-                order=order,
-                delivery_charge=order.delivery_charge
-            )
-            order.delivery_charge = delivery_charge_with_recovery
-            order.total = (order.subtotal + delivery_charge_with_recovery).quantize(Decimal("0.01"))
+            from orders.utils import apply_pending_recovery
+
+            delivery_charge = order.delivery_charge
+            for recovery_type in ["return", "replacement"]:
+                delivery_charge, applied = apply_pending_recovery(
+                    user=order.user,
+                    order=order,
+                    delivery_charge=delivery_charge,
+                    recovery_type=recovery_type
+                )
+                applied_recoveries[recovery_type] = float(applied)
+
+            order.delivery_charge = delivery_charge
+            order.total = (order.subtotal + delivery_charge).quantize(Decimal("0.01"))
             order.save(update_fields=["delivery_charge", "total"])
 
         return Response({
             "success": True,
             "message": "Payment verified, stock updated, recovery applied",
-            "data": result
+            "data": result,
+            "applied_recoveries": applied_recoveries,
         })
 
 
