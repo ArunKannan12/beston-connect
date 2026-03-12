@@ -28,7 +28,7 @@ class CategoryListCreateAPIView(generics.ListCreateAPIView):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
     permission_classes = [IsAdminOrReadOnly]
-
+    pagination_class = None
     # Add filtering and search
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['name', 'slug']  # Allows filtering by name or slug

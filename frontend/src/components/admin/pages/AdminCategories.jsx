@@ -37,7 +37,9 @@ const AdminCategories = () => {
       const res = await axiosInstance.get("categories/", {
         params: { search: search || "" },
       });
-      setCategories(res.data.results);
+      setCategories(res.data);
+      console.log(res.data,'categories');
+      
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Failed to fetch categories");
     }
