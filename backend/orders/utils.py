@@ -116,7 +116,6 @@ def create_order_with_items(
             total_commission=Decimal("0.00"),
             payment_method=payment_method,
             is_paid=False,
-            promoter=None,  # Order-level promoter never used
         )
 
     subtotal = Decimal("0.00")

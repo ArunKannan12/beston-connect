@@ -308,7 +308,8 @@ const Checkout = () => {
 
 
       const res = await axiosInstance.post(endpoint, payload);
-
+      console.log(res,'response')
+      console.log(res.data, 'checkout response');
       const orderNumber = res.data.order?.order_number || res.data.order?.id;
 
 
